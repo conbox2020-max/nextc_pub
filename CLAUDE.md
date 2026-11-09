@@ -41,8 +41,28 @@
   - 제목·강조: SDGyeokdongGL2(cLt·dRg·eBd·fHv·gBk), SDLateSpring-dBlk
   - 손글씨·보조: SDJebi-aLt, SDStudywithme(aLt·bRg), SDdBYeonpil(aLt·cBd)
   - 영문·숫자: DIN2014-Bold, MinionPro-Regular
-- 문단·문자 스타일의 세부 수치(크기·행간·자간·여백)는 아직 추출하지 않았다. 다음 작업에서 IDML의 `Resources/Styles.xml`, `MasterSpreads/`, `Resources/Preferences.xml`에서 뽑는다.
 - 서체 라이선스는 확인하지 않았다. 단정하지 않는다.
+
+### 확인된 사양 — 《국부론 수업》 IDML 추출 (2026-11-09, `tools/idml_graphics.py`)
+
+- 여백: 위 19.5 / 아래 31 / 안쪽 27 / 바깥 22mm, 1단 → **판면 폭 101mm**
+- 본문: Sandoll 명조Neo1 02 Lt 11.5pt / 행간 26pt / 자간 −50
+- 대제목: Sandoll 늦봄 04 Black 16pt / 32pt
+- 캡션: Bold 10pt / 12.8pt, 가운데 정렬
+- 도판 출처: Light 7pt / 10pt, 자간 10
+- 표: 표 제목 고딕Neo1 07 Bd 8.5pt / 머리글 07 Bd 8pt 흰 글자 / 본문 Lt 8pt·12pt
+- 도판 유형과 실측 크기
+  - 도비라: 156×220mm 전면(도련 포함), 부마다 같은 이미지 재사용
+  - 본문 일러스트: 101×67.3mm(3:2) + 인디자인 라벨
+  - 아이콘 도해: SVG 아이콘 9.5~12mm + 라벨 + 하단 도해 제목
+  - 사료 사진: 폭 35~66mm + `캡션`·`도판 출처`
+  - 지도: SVG 19×24.8mm
+  - 인물 초상: 원형 15.5mm / 30mm
+- 도해 라벨은 문단 스타일 없이 로컬 서식(Sandoll 스터디윗미 6.3~10pt, 10종 혼재)이다. 새 책에서는 도해 스타일로 정리한다.
+
+## 3-1. 진행 중인 프로젝트
+
+- 《10대를 위한 부동산 교양 수업》: 《국부론 수업》 파일에 조판 예정. 원고는 Drive 폴더 `1ALyqhhT3bSVF3maEn5kGnWsjmGi6mmzN`(파트1~4, 파트5~7 Google Docs). 도판 기획은 `projects/부동산교양수업/도판기획_v1.md`
 
 ## 4. 작업 환경과 방식
 
@@ -59,6 +79,7 @@
   2. Styles.xml(문단·문자·개체·표·셀 스타일), MasterSpreads(여백·단·러닝헤드·쪽번호), Graphic.xml(색상 견본) 추출
   3. 도서별 비교표 작성
   4. 공통값은 '넥스트씨 기준값', 도서별 차이는 '변형'으로 정리
+- IDML 분석 도구: `tools/idml_graphics.py`(배치 이미지·크기), `tools/idml_context.py`(캡션·도해 라벨). Drive에서 IDML을 받으면 base64로 저장되므로 디코드한 뒤 압축을 푼다.
 
 ## 5. 답변 형식 (디자인 업무 요청 시)
 
