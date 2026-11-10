@@ -257,7 +257,7 @@ function makeStyles(doc) {
     var gothicBd = fontName("Sandoll 고딕Neo1", ["07 Bd", "Bd"]);
     var gothicLt = fontName("Sandoll 고딕Neo1", ["03 Lt", "Lt"]);
     var gyeokdong = fontName("Sandoll 격동굴림2", ["06 Hv", "Hv"]);
-    // [제안] 절 제목: 국부론 '대제목'과 같은 서체·크기·색, 새 쪽 시작만 끔
+    // [확정 2026-11-10] 절 제목: 국부론 '대제목'과 같은 서체·크기·색, 새 쪽 시작만 끔
     mk("절 제목", "대제목", [["startParagraph", SP.ANYWHERE], ["spaceBefore", 39], ["spaceAfter", 6.5], ["keepWithNext", 3]]);
     // [레퍼런스] 소제목 = 국부론 '큰 제목'
     mk("소제목", "큰 제목", [["spaceBefore", 13]]);
