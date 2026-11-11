@@ -4,13 +4,62 @@
 import sys, os, json, re
 D = sys.argv[1]
 order = ["ch01", "ch02", "ch03", "ch04", "ch05", "ch06", "ch07", "back"]
+
+# 괄호 처리(2026-11-11, 편집자 요청: 국부론 수업과 같게)
+# 국부론은 본문 계열 문단의 괄호 기호를 지우고, 괄호 속 글자에 문자 스타일 '한글괄호'·'영문괄호'
+# (고딕Neo1 Lt 8pt, K80, 기준선 −1pt)를 썼다. 캡션·도판 출처·저서 연도에는 괄호를 남겼다.
+# → 출처 목록(참고 자료)과 도판 자리 문단은 괄호를 그대로 둔다.
+PAREN_STYLES = {"본문", "본문 삽입", "목록", "번호 목록", "잠깐 본문", "잠깐 본문 첫", "잠깐 본문 이어", "잠깐 본문 끝",
+                "절 제목", "소제목", "소소제목", "질문 제목"}
+paren_log = []
+
+def prep(s, t):
+    """조판용으로 문단을 다듬는다. 돌려주는 값: (스타일, 글자, [[시작, 길이, 문자 스타일], …]) 또는 None(뺄 문단)"""
+    if re.fullmatch(r"\s*#+\s*", t):
+        return None                                   # 원고의 마크다운 제목 기호만 남은 줄
+    if s == "소제목":                                 # ❶~❾: 스터디윗미에 글리프가 없어 다른 글꼴로 바뀐다 → 다른 소제목과 같은 '1)'
+        t = re.sub(r"^([❶-❾])\s*", lambda m: f"{ord(m.group(1)) - 0x2775}) ", t)
+    spans = []
+    if s in PAREN_STYLES:
+        out, pos = "", 0
+        for m in re.finditer(r"\(([^()]+)\)", t):
+            inner = m.group(1)
+            latin = re.search(r"[A-Za-z]", inner) and not re.search(r"[가-힣㐀-鿿]", inner)
+            out += t[pos:m.start()]
+            spans.append([len(out), len(inner), "영문괄호" if latin else "한글괄호"])
+            out += inner
+            pos = m.end()
+            if len(inner) > 15: paren_log.append(f"{s}: {inner}")
+        t = out + t[pos:]
+    if any(ord(c) > 0xFFFF for c in t):
+        raise SystemExit("BMP 밖 글자가 있어 문자 위치가 어긋날 수 있음: " + t[:40])
+    return s, t, spans
+
 book = []
 for k in order:
     blocks = json.load(open(os.path.join(D, k + ".json"), encoding="utf-8"))
     title = next((b for b in blocks if b["s"] == "장 제목"), None)
-    paras = [b for b in blocks if b["s"] != "장 제목"]
-    book.append({"key": k, "num": title["n"] if title else "", "title": title["t"] if title else "",
-                 "p": [[b["s"], b["t"], b.get("fig") or ""] for b in paras]})
+    paras = []
+    for b in blocks:
+        if b["s"] == "장 제목": continue
+        r = prep(b["s"], b["t"])
+        if r: paras.append([r[0], r[1], b.get("fig") or "", r[2]])
+    book.append({"key": k, "num": title["n"] if title else "", "title": title["t"] if title else "", "p": paras})
+
+# 태그 텍스트도 같은 내용으로 다시 쓴다(괄호 문자 스타일 포함)
+def tagged(ch):
+    def esc(s): return s.replace("\\", "\\\\").replace("<", "\\<").replace(">", "\\>")
+    out = ["<UNICODE-WIN>", "<Version:13>"]
+    if ch["num"]: out.append(f"<ParaStyle:도비라 번호>{ch['num']}"); out.append(f"<ParaStyle:도비라 제목>{esc(ch['title'])}")
+    for s, t, fig, spans in ch["p"]:
+        line, pos = "", 0
+        for a, n, cs in spans:
+            line += esc(t[pos:a]) + f"<CharStyle:{cs}>" + esc(t[a:a + n]) + "<CharStyle:>"; pos = a + n
+        out.append(f"<ParaStyle:{s}>" + line + esc(t[pos:]))
+    return "\r\n".join(out)
+for ch in book:
+    with open(os.path.join(D, ch["key"] + "_태그텍스트.txt"), "wb") as f:
+        f.write(b"\xff\xfe" + tagged(ch).encode("utf-16-le"))
 # 도판 크기(mm, 시안 기준). 2-1은 펼침면이라 두 칸.
 FIGSIZE = {"1-1": (101, 84), "1-2": (45, 40), "1-3": (101, 84), "1-4": (101, 74), "1-5": (101, 60),
            "2-1": (101, 110), "2-1R": (101, 101), "2-2": (101, 82), "2-3": (101, 64), "2-4": (101, 106), "2-5": (101, 50),
@@ -21,7 +70,12 @@ FIGSIZE = {"1-1": (101, 84), "1-2": (45, 40), "1-3": (101, 84), "1-4": (101, 74)
            "7-1": (101, 48), "7-2": (101, 86), "7-3": (101, 72), "7-4": (101, 98), "7-5": (101, 98), "7-6": (101, 56)}
 # 도판은 인디자인에서 직접 짠다(2026-11-11 확정). 자리 상자에 참고할 제작지시 파일 이름을 적는다.
 SIAN = os.path.join(D, "..", "시안")
-have = set(os.listdir(SIAN)) if os.path.isdir(SIAN) else set()
+if os.path.isdir(SIAN):
+    have = set(os.listdir(SIAN))
+else:   # 시안 폴더가 작업 트리에 없으면 git에 올라간 파일 이름으로 대신한다
+    import subprocess
+    r = subprocess.run(["git", "-C", D, "ls-files", "-z", "--", "../시안"], capture_output=True, text=True)
+    have = {os.path.basename(x) for x in r.stdout.split("\0") if x}
 GUIDE = {}
 for fid in FIGSIZE:
     base = fid.rstrip("R")
@@ -33,7 +87,8 @@ for fid in FIGSIZE:
 FRONT = {"reserve": ["표제지", "판권", "속표지"], "preface": "[머리말 자리 — 원고를 받으면 이 문단을 바꿔 넣는다]"}
 # 저장 위치(2026-11-11 사용자 지정): conbo > 인디자인 > 10대를 위한 부동산 교양 수업
 SAVE = {"folder": ["인디자인", "10대를 위한 부동산 교양 수업"], "user": "conbo", "file": "부동산교양수업_본문_v1"}
-data = json.dumps({"book": book, "fig": FIGSIZE, "guide": GUIDE, "front": FRONT, "save": SAVE}, ensure_ascii=False)
+PAREN_N = sum(len(p[3]) for ch in book for p in ch["p"])
+data = json.dumps({"book": book, "fig": FIGSIZE, "guide": GUIDE, "front": FRONT, "save": SAVE, "parenCount": PAREN_N}, ensure_ascii=False)
 JS = r'''// 《10대를 위한 부동산 교양 수업》 본문 조판 스크립트 (자동 생성: tools/make_layout_script.py — 이 파일을 직접 고치지 말 것)
 // UXP(.idjs)와 ExtendScript(.jsx) 모두에서 돈다.
 // 준비: 인디자인에서 《국부론 수업》 새 조판 파일(국부론수업_본문_새조판.indd)을 열어 두고 앞에 둔다. 원본은 읽기만 한다.
@@ -49,6 +104,7 @@ var FIG_MAX_H = FRAME_H - 15;       // 도판 자리 상자 최대 높이(mm): �
 var log = [];          // 확인 필요
 var report = [];       // 장별 시작 쪽 등
 var started = false;
+var FIG_GRAY = null;   // 도판 자리 상자 칠(makeStyles에서 정함)
 var RESULT = null;     // { doc, src, summary }
 
 // ── 공통 도우미 ──────────────────────────────────────────
@@ -141,8 +197,9 @@ function main() {
     withSource(srcFile, "표 스타일", function (f) { doc.importStyles(IF.TABLE_AND_CELL_STYLES_FORMAT, f, CR); });
     withSource(srcFile, "부모 페이지", function (f) { doc.loadMasters(f, CR); });
     var master = pickMaster(doc, srcMasterName);
+    fixRunningHead(doc);
 
-    // 3) 이 책용 스타일(제안) 만들기 — 국부론 스타일을 바탕으로
+    // 3) 이 책용 스타일 만들기 — 국부론 스타일을 바탕으로
     makeStyles(doc);
 
     // 4) 장마다 흘리기
@@ -158,20 +215,27 @@ function main() {
     // 머리말 자리: 4쪽부터
     var pp = doc.pages.add(LO.AT_END);
     pp.appliedMaster = master;
-    var pres = flow(doc, pp, { key: "머리말", p: [["본문", DATA.front.preface, ""]] }, master);
+    addSection(doc, pp, "머리말");
+    var pres = flow(doc, pp, { key: "머리말", p: [["본문", DATA.front.preface, "", []]] }, master);
     report.push("머리말: " + pp.name + "~" + pres.last + "쪽 자리(원고 미입수). 1장 도비라가 짝수 쪽에서 시작하도록 뒤에 빈 쪽이 생길 수 있음");
+    var blanks = [];
     for (var c = 0; c < DATA.book.length; c++) {
         var ch = DATA.book[c];
         var page = doc.pages.add(LO.AT_END);
         var line = (ch.num ? ch.num + "장" : ch.key) + ": ";
         if (ch.num) {
-            // 도비라 펼침면(짝수 쪽 + 홀수 쪽): 지금 쪽이 홀수(오른쪽)면 그 쪽을 빈 쪽으로 두고 다음 쪽부터
-            if (isRightPage(page)) { page.appliedMaster = master; page = doc.pages.add(LO.AT_END); }
-            page.appliedMaster = master;
-            var right = doc.pages.add(LO.AT_END); right.appliedMaster = master;
+            // 도비라 펼침면(짝수 쪽 + 홀수 쪽): 지금 쪽이 홀수(오른쪽)면 그 쪽을 빈 쪽으로 두고 다음 쪽부터.
+            // 국부론처럼 빈 쪽과 도비라 펼침면에는 부모 페이지를 걸지 않는다(러닝헤드·쪽번호 없음)
+            if (isRightPage(page)) { noMaster(page); blanks.push(page.name); page = doc.pages.add(LO.AT_END); }
+            noMaster(page);
+            var right = doc.pages.add(LO.AT_END); noMaster(right);
             dobira(doc, right, ch);
+            // 국부론처럼 도비라 쪽에서 섹션을 시작하고 장 제목을 섹션 표시자로 → 오른쪽 러닝헤드에 장 제목
+            addSection(doc, right, ch.title);
             line += "도비라 " + page.name + "~" + right.name + "쪽, ";
             page = doc.pages.add(LO.AT_END);
+        } else {
+            addSection(doc, page, "책을 덮으며");
         }
         page.appliedMaster = master;
         line += "본문 " + page.name + "쪽부터";
@@ -179,6 +243,8 @@ function main() {
         line += " " + res.last + "쪽까지" + (res.overset ? " ※넘침 남음" : "");
         report.push(line);
     }
+    if (blanks.length) report.push("빈 쪽(부모 페이지 없음): " + blanks.join(", ") + "쪽");
+    report.push("괄호: " + DATA.parenCount + "곳에서 괄호 기호를 지우고 '한글괄호'·'영문괄호' 문자 스타일 적용(출처·도판 자리는 괄호 유지)");
     try { APP.scriptPreferences.measurementUnit = E("AutoEnum").AUTO_VALUE; } catch (e) {}   // AUTO_VALUE는 AutoEnum에 있다
     var summary = "조판 완료: 총 " + doc.pages.length + "쪽\n" + report.join("\n") +
         (log.length ? ("\n\n확인 필요 " + log.length + "건 (전체는 1쪽 왼쪽 대지의 '조판 기록')\n" + log.slice(0, 12).join("\n")) : "\n\n확인 필요 없음");
@@ -186,11 +252,41 @@ function main() {
     RESULT = { doc: doc, src: filePath(srcFile), summary: summary };
 }
 
-function label(page, text) {
-    // 앞부속 자리 이름표(인쇄 안 됨)
+function noMaster(page) {
+    try { page.appliedMaster = E("NothingEnum").NOTHING; } catch (e) { log.push(page.name + "쪽 부모 페이지 없음 지정: " + e); }
+}
+function addSection(doc, page, marker) {
+    // 국부론: 머리말·부 도비라 쪽에서 섹션 시작, 쪽번호 이어 매김, 섹션 표시자 = 부 제목(오른쪽 러닝헤드에 나옴)
     try {
-        var b = page.bounds;
-        var t = page.textFrames.add({ geometricBounds: [b[0] + 90 * MM, b[1] + 20 * MM, b[0] + 110 * MM, b[3] - 20 * MM] });
+        var s = doc.sections.add(page);
+        setp(s, "continueNumbering", true);
+        try { s.includeSectionPrefix = false; } catch (e) {}
+        s.marker = marker;
+    } catch (e) { log.push("섹션 " + marker + ": " + e); }
+}
+function fixRunningHead(doc) {
+    // 국부론 부모 페이지의 왼쪽 러닝헤드 '10대를 위한 국부론 수업'을 이 책 제목으로 바꾼다(쪽번호 표시자는 그대로)
+    var n = 0, FROM = "국부론 수업", TO = "부동산 교양 수업";
+    for (var m = 0; m < doc.masterSpreads.length; m++) {
+        var tfs = doc.masterSpreads.item(m).textFrames;
+        for (var i = 0; i < tfs.length; i++) {
+            try {
+                var st = tfs.item(i).parentStory, at = String(st.contents).indexOf(FROM);
+                if (at < 0) continue;
+                st.characters.itemByRange(at, at + FROM.length - 1).contents = TO;
+                n++;
+            } catch (e) { log.push("러닝헤드 바꾸기: " + e); }
+        }
+    }
+    if (n) report.push("러닝헤드: '10대를 위한 " + TO + "'로 바꿈(" + n + "곳)");
+    else log.push("러닝헤드에서 '" + FROM + "'를 찾지 못함 — 부모 페이지를 직접 확인할 것");
+}
+
+function label(page, text, top) {
+    // 자리 이름표(인쇄 안 됨). top: 쪽 위에서 mm
+    try {
+        var b = page.bounds, y = (top === undefined ? 90 : top);
+        var t = page.textFrames.add({ geometricBounds: [b[0] + y * MM, b[1] + 20 * MM, b[0] + (y + 20) * MM, b[3] - 20 * MM] });
         t.contents = text;
         try { t.nonprinting = true; } catch (e) {}
     } catch (e) { log.push("이름표 " + text + ": " + e); }
@@ -234,9 +330,14 @@ function dobira(doc, page, ch) {
     var k80 = doc.swatches.itemByName("C=0 M=0 Y=0 K=80");
     setp(r, "fillColor", k80.isValid ? k80 : doc.swatches.itemByName("Black"));
     var t = page.textFrames.add({ geometricBounds: [b[0] + 95 * MM, b[1] + 38.3 * MM, b[0] + 160 * MM, b[1] + 115 * MM] });
-    t.contents = ch.num + "\r" + ch.title + "\r\r[도비라 자리 — 공통 일러스트: 시안/illust/도비라_공통_v1.png]";
-    var ps = findStyle(doc, "paragraphStyles", "도비라 제목");
-    if (ps) { var tp = t.parentStory.paragraphs; for (var i = 0; i < tp.length; i++) tp.item(i).appliedParagraphStyle = ps; }
+    // 장 번호와 장 제목만 넣는다. 도비라 일러스트 안내는 인쇄 안 되는 이름표로 따로(넘친 글 방지)
+    t.contents = ch.num + "\r" + ch.title;
+    var pn = findStyle(doc, "paragraphStyles", "도비라 번호"), pt = findStyle(doc, "paragraphStyles", "도비라 제목");
+    var tp = t.parentStory.paragraphs;
+    if (pn) tp.item(0).appliedParagraphStyle = pn;
+    if (pt) for (var i = 1; i < tp.length; i++) tp.item(i).appliedParagraphStyle = pt;
+    try { t.recompose(); if (t.overflows) log.push(ch.num + "장 도비라 제목이 글상자를 넘침"); } catch (e) {}
+    label(page, "[도비라 자리 — 공통 일러스트: 시안/illust/도비라_공통_v1.png]", 170);
 }
 
 function flow(doc, page, ch, master) {
@@ -252,14 +353,24 @@ function flow(doc, page, ch, master) {
         var nm = ch.p[j][0];
         if (!(nm in cache)) { cache[nm] = findStyle(doc, "paragraphStyles", nm); if (!cache[nm]) log.push("스타일 없음: " + nm); }
         if (cache[nm]) paras.item(j).applyParagraphStyle(cache[nm], true);
+        // 괄호를 지운 자리: 괄호 속 글자에 국부론 문자 스타일 '한글괄호'·'영문괄호'
+        var spans = ch.p[j][3] || [];
+        for (var sp = 0; sp < spans.length; sp++) {
+            var csn = spans[sp][2];
+            if (!(("c:" + csn) in cache)) { cache["c:" + csn] = findStyle(doc, "characterStyles", csn); if (!cache["c:" + csn]) log.push("문자 스타일 없음: " + csn); }
+            if (!cache["c:" + csn]) continue;
+            try { paras.item(j).characters.itemByRange(spans[sp][0], spans[sp][0] + spans[sp][1] - 1).appliedCharacterStyle = cache["c:" + csn]; }
+            catch (e) { log.push(ch.key + " 괄호 문자 스타일(" + ch.p[j][1].substr(0, 12) + "…): " + e); }
+        }
     }
     // 먼저 끝까지 흘린다. 넘친(overset) 텍스트 안에는 개체를 넣을 수 없다
     var th = thread(doc, tf, ch, master);
     // 도판 자리: 시안 크기의 회색 상자를 '줄 위' 고정 개체로 넣는다.
     // (인라인으로 넣으면 고정 행간 26pt 때문에 상자가 윗줄 글자를 덮는다)
     var AP = E("AnchorPosition"), HA = E("HorizontalAlignment");
-    var gray = doc.swatches.itemByName("C=0 M=0 Y=0 K=20");
-    if (!gray.isValid) gray = doc.swatches.itemByName("Paper");
+    // 회색 자리 상자: 국부론에 회색 견본이 없어 Paper(흰색)로 칠해져 보이지 않던 문제 → K15 견본을 만들고 개체 스타일 '도판 자리'로
+    var figOS = findStyle(doc, "objectStyles", "도판 자리");
+    var figPS = findStyle(doc, "paragraphStyles", "도판 자리");
     for (var k = ch.p.length - 1; k >= 0; k--) {
         var fid = ch.p[k][2];
         if (!fid || k >= paras.length) continue;
@@ -282,7 +393,9 @@ function flow(doc, page, ch, master) {
                 setp(ao, "anchoredPosition", AP.ABOVE_LINE);
                 setp(ao, "horizontalAlignment", HA.CENTER_ALIGN);
                 box.contents = "[도" + ids[q].replace("R", " 오른쪽") + "] " + sz[0] + "×" + sz[1] + "mm — 인디자인에서 제작: " + (DATA.guide[ids[q]] || "시안 참고");
-                box.fillColor = gray;
+                if (figOS) { try { box.applyObjectStyle(figOS, true); } catch (eOS) { box.appliedObjectStyle = figOS; } }
+                if (figPS) try { box.parentStory.paragraphs.item(0).appliedParagraphStyle = figPS; } catch (ePS) {}
+                if (FIG_GRAY) box.fillColor = FIG_GRAY;
             } catch (e) { log.push("도판 자리 " + ids[q] + ": " + e); }
         }
     }
@@ -326,39 +439,57 @@ function makeStyles(doc) {
         }
         return s;
     }
+    // 서체·스타일은 모두 국부론 수업 스타일을 바탕으로 한다(2026-11-11 편집자 요청). 국부론에 없는 요소(셋째 단계 제목·목록·질문·
+    // 잠깐 상자·출처 목록)는 국부론의 가장 가까운 스타일을 바탕으로 하고, 서체는 국부론에서 쓴 것만 쓴다.
     var SP = E("StartParagraph"), J = E("Justification");
     var yellow = swatchOrMake(doc, ["C=0 M=6 Y=68 K=0"], [0, 6, 68, 0]);
     var teal = swatchOrMake(doc, ["도해_청록 c80m30y40"], [80, 30, 40, 0]);
-    var gothicBd = fontName("Sandoll 고딕Neo1", ["07 Bd", "Bd"]);
+    FIG_GRAY = swatchOrMake(doc, ["C=0 M=0 Y=0 K=15"], [0, 0, 0, 15]);
     var gothicLt = fontName("Sandoll 고딕Neo1", ["03 Lt", "Lt"]);
     var gyeokdong = fontName("Sandoll 격동굴림2", ["06 Hv", "Hv"]);
+    var heads = [["keepAllLinesTogether", true]];   // 두 줄 제목이 쪽에서 갈라지지 않게
     // [확정 2026-11-10] 절 제목: 국부론 '대제목'과 같은 서체·크기·색, 새 쪽 시작만 끔
-    mk("절 제목", "대제목", [["startParagraph", SP.ANYWHERE], ["spaceBefore", 39], ["spaceAfter", 6.5], ["keepWithNext", 3]]);
-    // [레퍼런스] 소제목 = 국부론 '큰 제목'
-    mk("소제목", "큰 제목", [["spaceBefore", 13]]);
-    // [제안] 셋째 단계 제목
-    mk("소소제목", "본문", [["appliedFont", gothicBd], ["pointSize", 10.5], ["firstLineIndent", 0], ["spaceBefore", 6.5], ["keepWithNext", 2]]);
+    mk("절 제목", "대제목", [["startParagraph", SP.ANYWHERE], ["spaceBefore", 39], ["spaceAfter", 6.5], ["keepWithNext", 3]].concat(heads));
+    // [레퍼런스] 소제목 = 국부론 '큰 제목'(스터디윗미 03 Bold 13/26)
+    mk("소제목", "큰 제목", [["spaceBefore", 13], ["keepWithNext", 2]].concat(heads));
+    // 셋째 단계 제목 = 국부론 '학파 인물'(스터디윗미 03 Bold 10.5/26)에서 왼쪽 들여쓰기만 0
+    mk("소소제목", "학파 인물", [["leftIndent", 0], ["firstLineIndent", 0], ["spaceBefore", 6.5], ["keepWithNext", 2]].concat(heads));
     mk("질문 제목", "소소제목", [["fillColor", teal]]);
+    // 목록 = 국부론 '본문'에 내어쓰기만
     mk("목록", "본문", [["leftIndent", 4 * MM], ["firstLineIndent", -4 * MM]]);
     mk("번호 목록", "본문", [["leftIndent", 5 * MM], ["firstLineIndent", -5 * MM]]);
-    // [제안] '잠깐!' 상자: 국부론 상자와 같은 연노랑(0/6/68/0)을 문단 음영으로.
-    // 음영 폭은 단(판면 101mm)에 맞추고 좌우 오프셋 0, 글은 들여쓰기 3mm로 안쪽 여백을 만든다(음영이 판면 밖으로 나가지 않게)
-    var shade = [["paragraphShadingOn", true], ["paragraphShadingColor", yellow], ["paragraphShadingTopOffset", 4 * MM],
-                 ["paragraphShadingBottomOffset", 3 * MM], ["paragraphShadingLeftOffset", 0], ["paragraphShadingRightOffset", 0]];
-    mk("잠깐 라벨", "만화 대사", [["justification", J.LEFT_ALIGN], ["pointSize", 13], ["firstLineIndent", 0], ["leftIndent", 3 * MM], ["rightIndent", 3 * MM], ["spaceBefore", 26], ["keepWithNext", 2]].concat(shade));
-    mk("잠깐 본문", "본문", [["firstLineIndent", 0], ["leftIndent", 3 * MM], ["rightIndent", 3 * MM], ["spaceAfter", 26]].concat(shade));
-    // [제안] 여러 문단 상자(원본 Docs 대조, 2026-11-11): 첫 문단 들여쓰기 없음, 다음 문단부터 본문과 같은 들여쓰기, 문단 사이 간격 없음, 마지막 문단 뒤 26pt.
+    // '잠깐!' 상자: 연노랑(0/6/68/0, 확정 색)을 국부론 인용 상자('인용_국부론')와 같은 짜임으로.
+    // 국부론 값: 음영 좌우 오프셋 0, 위아래 2.65mm, 글 들여쓰기 왼 5 / 오른 3mm, 음영 12%.
+    // 연노랑 12%는 거의 보이지 않아 농도는 지금 값(20%)을 유지한다 [제안]. 국부론의 왼쪽 선(2.5pt)은 넣지 않았다.
+    var shade = [["paragraphShadingOn", true], ["paragraphShadingColor", yellow], ["paragraphShadingTint", 20],
+                 ["paragraphShadingTopOffset", 2.65 * MM], ["paragraphShadingBottomOffset", 2.65 * MM],
+                 ["paragraphShadingLeftOffset", 0], ["paragraphShadingRightOffset", 0]];
+    var boxIn = [["leftIndent", 5 * MM], ["rightIndent", 3 * MM]];
+    mk("잠깐 라벨", "만화 대사", [["justification", J.LEFT_ALIGN], ["pointSize", 13], ["firstLineIndent", 0], ["spaceBefore", 26], ["keepWithNext", 2]].concat(boxIn, shade));
+    mk("잠깐 본문", "본문", [["firstLineIndent", 0], ["spaceAfter", 26]].concat(boxIn, shade));
+    // 여러 문단 상자(원본 Docs 대조, 2026-11-11): 첫 문단 들여쓰기 없음, 다음 문단부터 본문과 같은 들여쓰기, 문단 사이 간격 없음, 마지막 문단 뒤 26pt.
     // 음영 설정이 같아서 이어진 문단의 음영은 한 상자로 합쳐진다
     var bodyIndent = 5 * MM;
     try { var bs = P.itemByName("본문"); if (bs.isValid && bs.firstLineIndent > 0) bodyIndent = bs.firstLineIndent; } catch (e) {}
     mk("잠깐 본문 첫", "잠깐 본문", [["spaceAfter", 0]]);
     mk("잠깐 본문 이어", "잠깐 본문 첫", [["firstLineIndent", bodyIndent]]);
     mk("잠깐 본문 끝", "잠깐 본문 이어", [["spaceAfter", 26]]);
-    mk("도판 자리", "본문", [["firstLineIndent", 0], ["justification", J.CENTER_ALIGN], ["spaceBefore", 6.5], ["spaceAfter", 13]]);
-    mk("참고 자료", "본문", [["appliedFont", gothicLt], ["pointSize", 8], ["leading", 12], ["firstLineIndent", -6 * MM], ["leftIndent", 6 * MM]]);
+    // 도판 자리 = 국부론 '캡션'(스터디윗미 03 Bold 10/12.8, 가운데)
+    mk("도판 자리", "캡션", [["spaceBefore", 6.5], ["spaceAfter", 13]]);
+    // 출처 목록 = 국부론 '표 본문'(고딕Neo1 Lt 8/12, 자간 −50)에 내어쓰기
+    mk("참고 자료", "표 본문", [["appliedFont", gothicLt], ["justification", J.LEFT_ALIGN], ["firstLineIndent", -6 * MM], ["leftIndent", 6 * MM]]);
     mk("참고 자료 제목", "소소제목", [["spaceBefore", 13]]);
+    // 도비라 = 국부론 19쪽 실측: 장 제목 격동굴림2 06 Hv 18/23.6pt, 자간 0, 흰색, 가운데('만화 대사' 바탕). 장 번호 20pt
     var white = doc.swatches.itemByName("Paper");
-    mk("도비라 제목", "대제목", [["appliedFont", gyeokdong], ["pointSize", 18], ["fillColor", white], ["justification", J.CENTER_ALIGN], ["startParagraph", SP.ANYWHERE]]);
+    mk("도비라 제목", "만화 대사", [["appliedFont", gyeokdong], ["pointSize", 18], ["leading", 23.6], ["tracking", 0], ["fillColor", white], ["justification", J.CENTER_ALIGN]]);
+    mk("도비라 번호", "도비라 제목", [["pointSize", 20], ["leading", 26], ["spaceAfter", 4]]);
+    // 도판 자리 상자 개체 스타일: K15 칠, 선 없음
+    try {
+        var os = doc.objectStyles.itemByName("도판 자리");
+        if (!os.isValid) os = doc.objectStyles.add({ name: "도판 자리" });
+        setp(os, "fillColor", FIG_GRAY);
+        try { os.strokeColor = doc.swatches.itemByName("None"); } catch (e) {}
+    } catch (e) { log.push("개체 스타일 도판 자리: " + e); }
 }
 
 function writeLog(doc, text) {
@@ -436,4 +567,5 @@ JS = JS.replace("__DATA__", data)
 for ext in ("idjs", "jsx"):
     with open(os.path.join(D, f"조판_부동산교양수업.{ext}"), "w", encoding="utf-8-sig" if ext == "jsx" else "utf-8") as f:
         f.write(JS)
-print("ok", len(JS))
+print("ok", len(JS), "괄호", PAREN_N)
+for x in paren_log: print("  긴 괄호:", x)

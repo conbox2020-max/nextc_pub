@@ -34,6 +34,7 @@ def convert(paths):
     for raw in lines:
         ln = raw.rstrip()
         if not ln.strip() or re.match(r"^\|\s*:?-{3,}", ln): continue
+        if re.fullmatch(r"\s*(\\?#)+\s*", ln): continue                  # 제목 기호만 남은 줄(228쪽 '#' 문제)
         if ln.startswith("# "):
             t = clean(ln[2:])
             m = re.match(r"제(\d)장 (.+)", t)
