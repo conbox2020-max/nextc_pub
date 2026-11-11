@@ -330,6 +330,13 @@ function makeStyles(doc) {
                  ["paragraphShadingBottomOffset", 3 * MM], ["paragraphShadingLeftOffset", 0], ["paragraphShadingRightOffset", 0]];
     mk("잠깐 라벨", "만화 대사", [["justification", J.LEFT_ALIGN], ["pointSize", 13], ["firstLineIndent", 0], ["leftIndent", 3 * MM], ["rightIndent", 3 * MM], ["spaceBefore", 26], ["keepWithNext", 2]].concat(shade));
     mk("잠깐 본문", "본문", [["firstLineIndent", 0], ["leftIndent", 3 * MM], ["rightIndent", 3 * MM], ["spaceAfter", 26]].concat(shade));
+    // [제안] 여러 문단 상자(원본 Docs 대조, 2026-11-11): 첫 문단 들여쓰기 없음, 다음 문단부터 본문과 같은 들여쓰기, 문단 사이 간격 없음, 마지막 문단 뒤 26pt.
+    // 음영 설정이 같아서 이어진 문단의 음영은 한 상자로 합쳐진다
+    var bodyIndent = 5 * MM;
+    try { var bs = P.itemByName("본문"); if (bs.isValid && bs.firstLineIndent > 0) bodyIndent = bs.firstLineIndent; } catch (e) {}
+    mk("잠깐 본문 첫", "잠깐 본문", [["spaceAfter", 0]]);
+    mk("잠깐 본문 이어", "잠깐 본문 첫", [["firstLineIndent", bodyIndent]]);
+    mk("잠깐 본문 끝", "잠깐 본문 이어", [["spaceAfter", 26]]);
     mk("도판 자리", "본문", [["firstLineIndent", 0], ["justification", J.CENTER_ALIGN], ["spaceBefore", 6.5], ["spaceAfter", 13]]);
     mk("참고 자료", "본문", [["appliedFont", gothicLt], ["pointSize", 8], ["leading", 12], ["firstLineIndent", -6 * MM], ["leftIndent", 6 * MM]]);
     mk("참고 자료 제목", "소소제목", [["spaceBefore", 13]]);
