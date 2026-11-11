@@ -179,7 +179,7 @@ function main() {
         line += " " + res.last + "쪽까지" + (res.overset ? " ※넘침 남음" : "");
         report.push(line);
     }
-    APP.scriptPreferences.measurementUnit = MU.AUTO_VALUE;
+    try { APP.scriptPreferences.measurementUnit = E("AutoEnum").AUTO_VALUE; } catch (e) {}   // AUTO_VALUE는 AutoEnum에 있다
     var summary = "조판 완료: 총 " + doc.pages.length + "쪽\n" + report.join("\n") +
         (log.length ? ("\n\n확인 필요 " + log.length + "건 (전체는 1쪽 왼쪽 대지의 '조판 기록')\n" + log.slice(0, 12).join("\n")) : "\n\n확인 필요 없음");
     writeLog(doc, summary + (log.length > 12 ? "\n" + log.slice(12).join("\n") : ""));
@@ -253,6 +253,8 @@ function flow(doc, page, ch, master) {
         if (!(nm in cache)) { cache[nm] = findStyle(doc, "paragraphStyles", nm); if (!cache[nm]) log.push("스타일 없음: " + nm); }
         if (cache[nm]) paras.item(j).applyParagraphStyle(cache[nm], true);
     }
+    // 먼저 끝까지 흘린다. 넘친(overset) 텍스트 안에는 개체를 넣을 수 없다
+    var th = thread(doc, tf, ch, master);
     // 도판 자리: 시안 크기의 회색 상자를 '줄 위' 고정 개체로 넣는다.
     // (인라인으로 넣으면 고정 행간 26pt 때문에 상자가 윗줄 글자를 덮는다)
     var AP = E("AnchorPosition"), HA = E("HorizontalAlignment");
@@ -267,7 +269,14 @@ function flow(doc, page, ch, master) {
             if (h > FIG_MAX_H) { log.push("도" + ids[q] + ": 높이 " + h + "mm가 판면에 안 들어가 자리 상자를 " + FIG_MAX_H + "mm로 줄임(실제 도판은 한 면 전체로 따로 앉힐 것)"); h = FIG_MAX_H; }
             try {
                 if (q > 0) paras.item(k).insertionPoints.item(0).contents = "\r";   // 2-1 펼침면: 상자마다 문단을 나눈다
-                var box = paras.item(k).insertionPoints.item(0).textFrames.add();
+                var ip = paras.item(k).insertionPoints.item(0), box;
+                try { box = ip.textFrames.add(); }
+                catch (eAdd) {
+                    // 대안: 쪽에 상자를 만든 뒤 그 자리에 고정 개체로 넣는다
+                    var pg = ip.parentTextFrames[0].parentPage;
+                    box = pg.textFrames.add();
+                    box.anchoredObjectSettings.insertAnchoredObject(ip, AP.ABOVE_LINE);
+                }
                 box.geometricBounds = [0, 0, h * MM, sz[0] * MM];
                 var ao = box.anchoredObjectSettings;
                 setp(ao, "anchoredPosition", AP.ABOVE_LINE);
@@ -277,8 +286,16 @@ function flow(doc, page, ch, master) {
             } catch (e) { log.push("도판 자리 " + ids[q] + ": " + e); }
         }
     }
+    // 상자 때문에 늘어난 만큼 다시 흘린다
+    th = thread(doc, th.last, ch, master);
+    return { last: th.last.parentPage ? th.last.parentPage.name : page.name, overset: th.overset };
+}
+
+function thread(doc, start, ch, master) {
     // 넘친 글을 새 쪽으로 이어 흘리기. 새 틀에 글이 한 자도 안 들어가면(안 들어가는 개체) 멈춘다
-    var last = tf, guard = 0, overset = false;
+    var LO = E("LocationOptions");
+    var last = start, guard = 0, overset = false;
+    try { last.recompose(); } catch (e) {}
     while (last.overflows) {
         if (guard++ >= 400) { overset = true; log.push(ch.key + ": 400쪽을 넘겨 흘리기를 멈춤"); break; }
         var np = doc.pages.add(LO.AT_END);
@@ -293,7 +310,7 @@ function flow(doc, page, ch, master) {
         }
         last = nf;
     }
-    return { last: last.parentPage ? last.parentPage.name : page.name, overset: overset };
+    return { last: last, overset: overset };
 }
 
 function makeStyles(doc) {
