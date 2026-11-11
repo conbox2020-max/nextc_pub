@@ -19,7 +19,21 @@ FIGSIZE = {"1-1": (101, 84), "1-2": (45, 40), "1-3": (101, 84), "1-4": (101, 74)
            "5-1": (101, 77), "5-2": (101, 62), "5-3": (101, 64), "5-4": (101, 77), "5-5": (101, 98), "5-6": (101, 78), "5-7": (101, 49),
            "6-1": (101, 57), "6-2": (101, 64), "6-4": (101, 109), "6-5": (101, 61),
            "7-1": (101, 48), "7-2": (101, 86), "7-3": (101, 72), "7-4": (101, 98), "7-5": (101, 98), "7-6": (101, 56)}
-data = json.dumps({"book": book, "fig": FIGSIZE}, ensure_ascii=False)
+# 도판은 인디자인에서 직접 짠다(2026-11-11 확정). 자리 상자에 참고할 제작지시 파일 이름을 적는다.
+SIAN = os.path.join(D, "..", "시안")
+have = set(os.listdir(SIAN)) if os.path.isdir(SIAN) else set()
+GUIDE = {}
+for fid in FIGSIZE:
+    base = fid.rstrip("R")
+    for name in (f"도{base}_인디자인_제작지시.md", f"{base.split('-')[0]}장_인디자인_제작지시.md"):
+        if name in have: GUIDE[fid] = "시안/" + name; break
+    else:
+        GUIDE[fid] = "제작지시 없음 — 시안 이미지 참고"
+# 앞부속(2026-11-11 확정): 1~3쪽 표제지·판권·속표지 자리, 4쪽부터 머리말 자리(원고 미입수, 자리만)
+FRONT = {"reserve": ["표제지", "판권", "속표지"], "preface": "[머리말 자리 — 원고를 받으면 이 문단을 바꿔 넣는다]"}
+# 저장 위치(2026-11-11 사용자 지정): conbo > 인디자인 > 10대를 위한 부동산 교양 수업
+SAVE = {"folder": ["인디자인", "10대를 위한 부동산 교양 수업"], "user": "conbo", "file": "부동산교양수업_본문_v1"}
+data = json.dumps({"book": book, "fig": FIGSIZE, "guide": GUIDE, "front": FRONT, "save": SAVE}, ensure_ascii=False)
 JS = r'''// 《10대를 위한 부동산 교양 수업》 본문 조판 스크립트 (자동 생성: tools/make_layout_script.py — 이 파일을 직접 고치지 말 것)
 // UXP(.idjs)와 ExtendScript(.jsx) 모두에서 돈다.
 // 준비: 인디자인에서 《국부론 수업》 새 조판 파일(국부론수업_본문_새조판.indd)을 열어 두고 앞에 둔다. 원본은 읽기만 한다.
@@ -35,6 +49,7 @@ var FIG_MAX_H = FRAME_H - 15;       // 도판 자리 상자 최대 높이(mm): �
 var log = [];          // 확인 필요
 var report = [];       // 장별 시작 쪽 등
 var started = false;
+var RESULT = null;     // { doc, src, summary }
 
 // ── 공통 도우미 ──────────────────────────────────────────
 function say(msg) {
@@ -132,11 +147,22 @@ function main() {
 
     // 4) 장마다 흘리기
     var LO = E("LocationOptions");
-    var first = true;
+    // 앞부속 자리: 1~3쪽(표제지·판권·속표지)은 부모 페이지 없이 비워 두고 이름표만 둔다
+    var rs = DATA.front.reserve;
+    for (var r = 0; r < rs.length; r++) {
+        var fp = (r === 0) ? doc.pages.item(0) : doc.pages.add(LO.AT_END);
+        try { fp.appliedMaster = E("NothingEnum").NOTHING; } catch (e) { log.push(rs[r] + " 쪽 부모 페이지 없음 지정: " + e); }
+        label(fp, "[" + rs[r] + " 자리]");
+    }
+    report.push("앞부속: 1~" + rs.length + "쪽 " + rs.join("·") + " 자리");
+    // 머리말 자리: 4쪽부터
+    var pp = doc.pages.add(LO.AT_END);
+    pp.appliedMaster = master;
+    var pres = flow(doc, pp, { key: "머리말", p: [["본문", DATA.front.preface, ""]] }, master);
+    report.push("머리말: " + pp.name + "~" + pres.last + "쪽 자리(원고 미입수). 1장 도비라가 짝수 쪽에서 시작하도록 뒤에 빈 쪽이 생길 수 있음");
     for (var c = 0; c < DATA.book.length; c++) {
         var ch = DATA.book[c];
-        var page;
-        if (first) { page = doc.pages.item(0); first = false; } else { page = doc.pages.add(LO.AT_END); }
+        var page = doc.pages.add(LO.AT_END);
         var line = (ch.num ? ch.num + "장" : ch.key) + ": ";
         if (ch.num) {
             // 도비라 펼침면(짝수 쪽 + 홀수 쪽): 지금 쪽이 홀수(오른쪽)면 그 쪽을 빈 쪽으로 두고 다음 쪽부터
@@ -157,7 +183,17 @@ function main() {
     var summary = "조판 완료: 총 " + doc.pages.length + "쪽\n" + report.join("\n") +
         (log.length ? ("\n\n확인 필요 " + log.length + "건 (전체는 1쪽 왼쪽 대지의 '조판 기록')\n" + log.slice(0, 12).join("\n")) : "\n\n확인 필요 없음");
     writeLog(doc, summary + (log.length > 12 ? "\n" + log.slice(12).join("\n") : ""));
-    say(summary);
+    RESULT = { doc: doc, src: filePath(srcFile), summary: summary };
+}
+
+function label(page, text) {
+    // 앞부속 자리 이름표(인쇄 안 됨)
+    try {
+        var b = page.bounds;
+        var t = page.textFrames.add({ geometricBounds: [b[0] + 90 * MM, b[1] + 20 * MM, b[0] + 110 * MM, b[3] - 20 * MM] });
+        t.contents = text;
+        try { t.nonprinting = true; } catch (e) {}
+    } catch (e) { log.push("이름표 " + text + ": " + e); }
 }
 
 function setMargins(mp) {
@@ -236,7 +272,7 @@ function flow(doc, page, ch, master) {
                 var ao = box.anchoredObjectSettings;
                 setp(ao, "anchoredPosition", AP.ABOVE_LINE);
                 setp(ao, "horizontalAlignment", HA.CENTER_ALIGN);
-                box.contents = "[도" + ids[q].replace("R", " 오른쪽") + "] " + sz[0] + "×" + sz[1] + "mm — 시안 PDF를 놓을 자리";
+                box.contents = "[도" + ids[q].replace("R", " 오른쪽") + "] " + sz[0] + "×" + sz[1] + "mm — 인디자인에서 제작: " + (DATA.guide[ids[q]] || "시안 참고");
                 box.fillColor = gray;
             } catch (e) { log.push("도판 자리 " + ids[q] + ": " + e); }
         }
@@ -311,6 +347,52 @@ function writeLog(doc, text) {
     } catch (e) { log.push("조판 기록 글상자: " + e); }
 }
 
+// ── 저장 ────────────────────────────────────────────────
+// 지정 폴더(conbo > 인디자인 > 10대를 위한 부동산 교양 수업)를 찾아 새 문서를 저장한다.
+// 폴더를 못 찾거나, 같은 이름 파일이 있는지 확인할 수 없으면 저장하지 않는다(덮어쓰기 방지).
+function exists(p) {
+    // true / false / null(확인 불가)
+    if (!ID) { try { return Folder(p).exists || File(p).exists; } catch (e) { return null; } }
+    var fs = null; try { fs = require("fs"); } catch (e) { return null; }
+    var missing = false, tries = [p, "file:" + p];
+    for (var i = 0; i < tries.length; i++) {
+        try { fs.lstatSync(tries[i]); return true; }
+        catch (e) { if (/ENOENT|not ?found|no such|exist/i.test(String(e))) missing = true; }
+    }
+    return missing ? false : null;
+}
+function homeDirs(srcPath) {
+    var out = [], m;
+    if ((m = /^(\/Users\/[^\/]+)/.exec(srcPath))) out.push(m[1]);
+    if ((m = /^([A-Za-z]:\\Users\\[^\\]+)/.exec(srcPath))) out.push(m[1]);
+    if (!ID) { try { out.push(Folder("~").fsName); } catch (e) {} }
+    else { try { out.push(require("os").homedir()); } catch (e) {} }
+    out.push("/Users/" + DATA.save.user);
+    return out;
+}
+function saveDoc(doc, srcPath) {
+    var S = DATA.save, homes = homeDirs(srcPath), cands = [];
+    for (var i = 0; i < homes.length; i++) {
+        var sep = homes[i].indexOf("\\") >= 0 ? "\\" : "/", h = homes[i];
+        var tails = [S.folder, [S.user].concat(S.folder), ["Documents", S.user].concat(S.folder), ["Desktop", S.user].concat(S.folder)];
+        for (var t = 0; t < tails.length; t++) cands.push(h + sep + tails[t].join(sep));
+    }
+    var folder = null, unknown = false;
+    for (var c = 0; c < cands.length && !folder; c++) { var ex = exists(cands[c]); if (ex === true) folder = cands[c]; else if (ex === null) unknown = true; }
+    if (!folder) return "저장 안 함: '" + S.user + " > " + S.folder.join(" > ") + "' 폴더를 " + (unknown ? "확인할 수 없음" : "찾지 못함") + ". [파일 > 저장]으로 직접 저장하세요.";
+    var sep2 = folder.indexOf("\\") >= 0 ? "\\" : "/", path = null;
+    for (var n = 1; n < 50 && !path; n++) {
+        var p = folder + sep2 + S.file + (n > 1 ? "_" + n : "") + ".indd";
+        var e2 = exists(p);
+        if (e2 === null) return "저장 안 함: 같은 이름 파일이 있는지 확인할 수 없음(덮어쓰기 방지). 폴더: " + folder;
+        if (e2 === false) path = p;
+    }
+    if (!path || path === srcPath) return "저장 안 함: 저장할 파일 이름을 정하지 못함";
+    try { if (!ID) doc.save(new File(path)); else doc.save(path); }
+    catch (e) { try { doc.save(path); } catch (e2b) { return "저장 실패: " + e2b + " (" + path + ")"; } }
+    return "저장: " + path;
+}
+
 // 실행: 되돌리기 한 번으로 전체를 취소할 수 있게 doScript로 감싼다. 안 되면 그냥 실행
 (function () {
     try {
@@ -318,8 +400,12 @@ function writeLog(doc, text) {
         APP.doScript(main, lang, [], E("UndoModes").ENTIRE_SCRIPT, "부동산교양수업 조판");
         if (!started) main();   // doScript가 함수를 실행하지 않은 경우
     } catch (e) {
-        if (!started) main(); else say("실행 중 오류: " + e + "\n" + log.join("\n"));
+        if (!started) main(); else { say("실행 중 오류: " + e + "\n" + log.join("\n")); return; }
     }
+    if (!RESULT) return;
+    var saved = "";
+    try { saved = saveDoc(RESULT.doc, RESULT.src); } catch (e) { saved = "저장 실패: " + e; }
+    say(saved + "\n\n" + RESULT.summary);
 })();
 '''
 JS = JS.replace("__DATA__", data)
