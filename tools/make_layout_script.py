@@ -41,6 +41,13 @@ def prep(s, t):
         raise SystemExit("BMP 밖 글자가 있어 문자 위치가 어긋날 수 있음: " + t[:40])
     return s, t, spans
 
+def dobira_lines(t, one_line=12):   # 18pt 12자 ≈ 70mm < 글상자 폭 76.7mm
+    """도비라 장 제목: 길면 가운데에 가장 가까운 띄어쓰기에서 두 줄로(국부론 '애덤 스미스는 / 누구인가?'처럼)"""
+    if len(t) <= one_line or " " not in t: return [t]
+    mid = len(t) / 2
+    at = min((i for i, c in enumerate(t) if c == " "), key=lambda i: abs(i - mid))
+    return [t[:at], t[at + 1:]]
+
 book = []
 for k in order:
     blocks = json.load(open(os.path.join(D, k + ".json"), encoding="utf-8"))
@@ -50,13 +57,16 @@ for k in order:
         if b["s"] == "장 제목": continue
         r = prep(b["s"], b["t"])
         if r: paras.append([r[0], r[1], b.get("fig") or "", r[2]])
-    book.append({"key": k, "num": title["n"] if title else "", "title": title["t"] if title else "", "p": paras})
+    tt = title["t"] if title else ""
+    book.append({"key": k, "num": title["n"] if title else "", "title": tt, "dobira": dobira_lines(tt), "p": paras})
 
 # 태그 텍스트도 같은 내용으로 다시 쓴다(괄호 문자 스타일 포함)
 def tagged(ch):
     def esc(s): return s.replace("\\", "\\\\").replace("<", "\\<").replace(">", "\\>")
     out = ["<UNICODE-WIN>", "<Version:13>"]
-    if ch["num"]: out.append(f"<ParaStyle:도비라 번호>{ch['num']}"); out.append(f"<ParaStyle:도비라 제목>{esc(ch['title'])}")
+    if ch["num"]:
+        out.append(f"<ParaStyle:도비라 번호>{ch['num']}")
+        for ln in ch["dobira"]: out.append(f"<ParaStyle:도비라 제목>{esc(ln)}")
     for s, t, fig, spans in ch["p"]:
         line, pos = "", 0
         for a, n, cs in spans:
@@ -92,7 +102,8 @@ for fid in FIGSIZE:
 # 앞부속(2026-11-11 확정): 1~3쪽 표제지·판권·속표지 자리, 4쪽부터 머리말 자리(원고 미입수, 자리만)
 FRONT = {"reserve": ["표제지", "판권", "속표지"], "preface": "[머리말 자리 — 원고를 받으면 이 문단을 바꿔 넣는다]"}
 # 저장 위치(2026-11-11 사용자 지정): conbo > 인디자인 > 10대를 위한 부동산 교양 수업
-SAVE = {"folder": ["인디자인", "10대를 위한 부동산 교양 수업"], "user": "conbo", "file": "부동산교양수업_본문_v1"}
+# 실제 폴더 이름은 '10대를 위한 부동산 교양수업'(띄어쓰기 없음, 2026-11-11 확인) → 두 이름을 모두 찾는다
+SAVE = {"folder": ["인디자인", "10대를 위한 부동산 교양수업"], "alt": ["10대를 위한 부동산 교양 수업"], "user": "conbo", "file": "부동산교양수업_본문_v1"}
 LONG_N = sum(1 for ch in book for p in ch["p"] for sp in p[3] if sp[2] == "긴괄호")
 PAREN_N = sum(len(p[3]) for ch in book for p in ch["p"]) - LONG_N
 data = json.dumps({"book": book, "fig": FIGSIZE, "guide": GUIDE, "front": FRONT, "save": SAVE,
@@ -339,7 +350,8 @@ function dobira(doc, page, ch) {
     setp(r, "fillColor", k80.isValid ? k80 : doc.swatches.itemByName("Black"));
     var t = page.textFrames.add({ geometricBounds: [b[0] + 95 * MM, b[1] + 38.3 * MM, b[0] + 160 * MM, b[1] + 115 * MM] });
     // 장 번호와 장 제목만 넣는다. 도비라 일러스트 안내는 인쇄 안 되는 이름표로 따로(넘친 글 방지)
-    t.contents = ch.num + "\r" + ch.title;
+    // 국부론 도비라처럼 제목을 어절 사이에서 두 줄로 나눈다(글자 중간 줄바꿈 방지)
+    t.contents = ch.num + "\r" + ch.dobira.join("\r");
     var pn = findStyle(doc, "paragraphStyles", "도비라 번호"), pt = findStyle(doc, "paragraphStyles", "도비라 제목");
     var tp = t.parentStory.paragraphs;
     if (pn) tp.item(0).appliedParagraphStyle = pn;
@@ -455,7 +467,8 @@ function makeStyles(doc) {
     FIG_GRAY = swatchOrMake(doc, ["C=0 M=0 Y=0 K=15"], [0, 0, 0, 15]);
     var gothicLt = fontName("Sandoll 고딕Neo1", ["03 Lt", "Lt"]);
     var gyeokdong = fontName("Sandoll 격동굴림2", ["06 Hv", "Hv"]);
-    var heads = [["keepAllLinesTogether", true]];   // 두 줄 제목이 쪽에서 갈라지지 않게
+    // 두 줄 제목이 쪽에서 갈라지지 않게. keepAllLinesTogether는 keepLinesTogether가 켜져 있어야 동작한다(3차 실행에서 확인)
+    var heads = [["keepLinesTogether", true], ["keepAllLinesTogether", true]];
     // [확정 2026-11-10] 절 제목: 국부론 '대제목'과 같은 서체·크기·색, 새 쪽 시작만 끔
     mk("절 제목", "대제목", [["startParagraph", SP.ANYWHERE], ["spaceBefore", 39], ["spaceAfter", 6.5], ["keepWithNext", 3]].concat(heads));
     // [레퍼런스] 소제목 = 국부론 '큰 제목'(스터디윗미 03 Bold 13/26)
@@ -543,8 +556,13 @@ function saveDoc(doc, srcPath) {
     var S = DATA.save, homes = homeDirs(srcPath), cands = [];
     for (var i = 0; i < homes.length; i++) {
         var sep = homes[i].indexOf("\\") >= 0 ? "\\" : "/", h = homes[i];
-        var tails = [S.folder, [S.user].concat(S.folder), ["Documents", S.user].concat(S.folder), ["Desktop", S.user].concat(S.folder)];
-        for (var t = 0; t < tails.length; t++) cands.push(h + sep + tails[t].join(sep));
+        var names = [S.folder].concat([]);
+        for (var a = 0; a < (S.alt || []).length; a++) names.push([S.folder[0], S.alt[a]]);
+        for (var nI = 0; nI < names.length; nI++) {
+            var F = names[nI];
+            var tails = [F, [S.user].concat(F), ["Documents", S.user].concat(F), ["Desktop", S.user].concat(F)];
+            for (var t = 0; t < tails.length; t++) cands.push(h + sep + tails[t].join(sep));
+        }
     }
     var folder = null, unknown = false;
     for (var c = 0; c < cands.length && !folder; c++) { var ex = exists(cands[c]); if (ex === true) folder = cands[c]; else if (ex === null) unknown = true; }
