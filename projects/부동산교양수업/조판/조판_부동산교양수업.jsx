@@ -53,6 +53,28 @@ function copyRibbon(src, doc) {
     return null;
 }
 
+function placeSpread(doc, paras, k, ids) {
+    // 펼침면 도판: 도판 자리 문단을 지우고, 그 자리 다음에 오는 첫 펼침면(짝수 쪽 + 홀수 쪽)의 판면 맨 위에 두 그림을 놓는다.
+    // 텍스트 감싸기 '개체 건너뛰기'로 본문은 그림 아래로 이어진다. 글 흐름에 고정된 개체가 아니므로 원고를 크게 고치면 위치를 다시 확인한다
+    try {
+        var p = paras.item(k), last = (k === paras.length - 1);
+        if (last) p.characters.itemByRange(0, p.characters.length - 1).remove(); else p.remove();
+        try { p.parentStory.recompose(); } catch (e) {}
+        var at = paras.item(Math.min(k, paras.length - 1)).characters.item(0).parentTextFrames[0].parentPage;
+        var L = isRightPage(at) ? doc.pages.item(at.documentOffset + 1) : at;
+        var R = doc.pages.item(L.documentOffset + 1);
+        var pgs = [L, R], TW = E("TextWrapModes");
+        for (var i = 0; i < 2; i++) {
+            var sz = DATA.fig[ids[i]], fb = frameBounds(pgs[i]);
+            var rect = pgs[i].rectangles.add({ geometricBounds: [fb[0], fb[1], fb[0] + sz[1] * MM, fb[1] + sz[0] * MM] });
+            try { rect.strokeWeight = 0; rect.fillColor = doc.swatches.itemByName("None"); } catch (e) {}
+            try { rect.textWrapPreferences.textWrapMode = TW.JUMP_OBJECT_TEXT_WRAP; rect.textWrapPreferences.textWrapOffset = [0, 0, 13, 0]; } catch (e) { log.push("도" + ids[i] + " 텍스트 감싸기: " + e); }
+            if (placeInto(rect, DATA.figFile[ids[i]], false)) FIG_N++;
+        }
+        report.push("도2-1 펼침면: " + L.name + "~" + R.name + "쪽 맨 위(글 흐름 밖, 본문은 아래로 이어짐)");
+    } catch (e) { log.push("펼침면 도판 " + ids[0] + ": " + e); }
+}
+
 function placeRibbons(story) {
     if (!RIBBON) return 0;
     var AP = E("AnchorPosition"), n = 0, ps = story.paragraphs;
@@ -453,9 +475,13 @@ function flow(doc, page, ch, master) {
     // 회색 자리 상자: 국부론에 회색 견본이 없어 Paper(흰색)로 칠해져 보이지 않던 문제 → K15 견본을 만들고 개체 스타일 '도판 자리'로
     var figOS = findStyle(doc, "objectStyles", "도판 자리");
     var figPS = findStyle(doc, "paragraphStyles", "도판 자리");
+    var spreadK = -1;
     for (var k = ch.p.length - 1; k >= 0; k--) {
         var fid = ch.p[k][2];
         if (!fid || k >= paras.length) continue;
+        // 펼침면 도판(2-1)은 글 흐름에 고정하지 않는다. 고정하면 두 그림이 한 장의 앞뒷면으로 갈라질 수 있다(9차 실행: 41·42쪽).
+        // 아래에서 흘리기를 마친 뒤 마주 보는 두 쪽 위에 직접 놓는다
+        if (fid === "2-1" && DATA.figFile["2-1"] && DATA.figFile["2-1R"]) { spreadK = k; continue; }
         var ids = (fid === "2-1") ? ["2-1R", "2-1"] : [fid];   // 뒤에서부터 넣으므로 결과 순서는 2-1, 2-1R
         // 시안 PDF가 있는 도판은 원고의 도판 설명 글(인쇄용이 아님)을 지우고 그림만 남긴다
         var hasFile = true;
@@ -500,6 +526,7 @@ function flow(doc, page, ch, master) {
     }
     // 상자 때문에 늘어난 만큼 다시 흘린다
     th = thread(doc, th.last, ch, master);
+    if (spreadK >= 0) { placeSpread(doc, paras, spreadK, ["2-1", "2-1R"]); th = thread(doc, th.last, ch, master); }
     // 잠깐 리본: 흘리기가 끝난 뒤 제목 문단마다 붙인다(사용자 지정 고정 개체라 글 흐름을 밀지 않는다)
     var nr = placeRibbons(story);
     if (nr) { RIBBON_N += nr; th = thread(doc, th.last, ch, master); }
