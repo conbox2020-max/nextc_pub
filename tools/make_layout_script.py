@@ -131,6 +131,18 @@ for fid in FIGSIZE:
         if name in have: GUIDE[fid] = "시안/" + name; break
     else:
         GUIDE[fid] = "제작지시 없음 — 시안 이미지 참고"
+# 도판 넣기(2026-11-11 편집자 요청): 시안의 실제 크기 PDF(도판마다 가장 높은 버전)를 자리 상자에 넣는다.
+# 시안이 없는 도판(1-2, 1-5)은 회색 자리 상자로 둔다. 2-1은 왼쪽·오른쪽 두 쪽
+import unicodedata
+haveN = {unicodedata.normalize("NFC", x) for x in have}
+FIGFILE = {}
+for fid in FIGSIZE:
+    base = fid.rstrip("R")
+    c = [f for f in haveN if f.startswith(f"도{base}_") and f.endswith("_실제크기.pdf")]
+    if base == "2-1": c = [f for f in c if ("오른쪽" in f) == (fid == "2-1R")]
+    c.sort(key=lambda f: int((re.search(r"_v(\d+)", f) or re.search(r"(\d*)", "0")).group(1) or 0))
+    if c: FIGFILE[fid] = c[-1]
+DOBIRA_IMG = "illust/도비라_공통_v1.png"
 # 앞부속(2026-11-11 확정): 1~3쪽 표제지·판권·속표지 자리, 4쪽부터 머리말 자리(원고 미입수, 자리만)
 FRONT = {"reserve": ["표제지", "판권", "속표지"], "preface": "[머리말 자리 — 원고를 받으면 이 문단을 바꿔 넣는다]"}
 # 저장 위치(2026-11-11 사용자 지정): conbo > 인디자인 > 10대를 위한 부동산 교양 수업
@@ -139,7 +151,8 @@ SAVE = {"folder": ["인디자인", "10대를 위한 부동산 교양수업"], "a
 LONG_N = sum(1 for ch in book for p in ch["p"] for sp in p[3] if sp[2] == "긴괄호")
 PAREN_N = sum(len(p[3]) for ch in book for p in ch["p"]) - LONG_N
 data = json.dumps({"book": book, "fig": FIGSIZE, "guide": GUIDE, "front": FRONT, "save": SAVE,
-                   "parenCount": PAREN_N, "longParen": LONG_N, "chColor": CH_COLOR, "jamkkanN": len(JT)}, ensure_ascii=False)
+                   "parenCount": PAREN_N, "longParen": LONG_N, "chColor": CH_COLOR, "jamkkanN": len(JT),
+                   "figFile": FIGFILE, "dobiraImg": DOBIRA_IMG, "sianAbs": os.path.abspath(SIAN)}, ensure_ascii=False)
 JS = r'''// 《10대를 위한 부동산 교양 수업》 본문 조판 스크립트 (자동 생성: tools/make_layout_script.py — 이 파일을 직접 고치지 말 것)
 // UXP(.idjs)와 ExtendScript(.jsx) 모두에서 돈다.
 // 준비: 인디자인에서 《국부론 수업》 새 조판 파일(국부론수업_본문_새조판.indd)을 열어 두고 앞에 둔다. 원본은 읽기만 한다.
@@ -337,6 +350,7 @@ function main() {
     var master = pickMaster(doc, srcMasterName);
     fixRunningHead(doc);
     RIBBON = copyRibbon(src, doc);
+    DOBIRA_SRC = findDobiraSource(src);
 
     // 3) 이 책용 스타일 만들기 — 국부론 스타일을 바탕으로
     makeStyles(doc);
@@ -384,6 +398,9 @@ function main() {
     }
     if (blanks.length) report.push("빈 쪽(부모 페이지 없음): " + blanks.join(", ") + "쪽");
     try { if (RIBBON) RIBBON.remove(); } catch (e) {}
+    var figTotal = 0; for (var fk in DATA.figFile) figTotal++;
+    report.push("도판: 시안 PDF " + FIG_N + "/" + figTotal + "개 넣음(시안 없는 1-2·1-5는 회색 자리 상자)");
+    if (FIG_MISS.length) log.push("시안 파일 없음: " + FIG_MISS.join(", "));
     report.push("잠깐 코너: 제목 " + DATA.jamkkanN + "개, 리본 " + RIBBON_N + "개");
     if (RIBBON && RIBBON_N !== DATA.jamkkanN) log.push("잠깐 리본 수(" + RIBBON_N + ")가 제목 수(" + DATA.jamkkanN + ")와 다름");
     report.push("괄호: " + DATA.parenCount + "곳에서 괄호 기호를 지우고 '한글괄호'·'영문괄호' 문자 스타일 적용, 긴 괄호 " + DATA.longParen + "곳은 괄호를 남기고 10pt('긴괄호'). 출처·도판 자리는 그대로");
@@ -466,11 +483,88 @@ function frameBounds(page) {
     return [b[0] + top, b[1] + (isRight ? ins : out), b[2] - bot, b[3] - (isRight ? out : ins)];
 }
 
+// ── 시안 파일 찾기·넣기 ─────────────────────────────────
+var SIAN_DIR = null, FIG_N = 0, FIG_MISS = [];
+function sianDir() {
+    if (SIAN_DIR !== null) return SIAN_DIR;
+    var c = [];
+    try { if (!ID) c.push(File($.fileName).parent.parent.fsName + "/시안"); } catch (e) {}   // 스크립트 옆(조판/..)
+    c.push(DATA.sianAbs);
+    for (var i = 0; i < c.length; i++) if (exists(c[i]) === true) { SIAN_DIR = c[i]; return SIAN_DIR; }
+    SIAN_DIR = "";
+    log.push("시안 폴더를 찾지 못해 도판을 넣지 않음: " + c.join(" / "));
+    return SIAN_DIR;
+}
+function placeInto(frame, name, fill) {
+    // frame에 시안 파일을 넣고 맞춘다. fill: true면 틀을 꽉 채움(도비라), 아니면 비율대로 맞춤
+    var dir = sianDir(); if (!dir) return false;
+    var p = dir + "/" + name;
+    if (exists(p) !== true) { FIG_MISS.push(name); return false; }
+    var pp = APP.pdfPlacePreferences, oldCrop = null;
+    try { oldCrop = pp.pdfCrop; pp.pdfCrop = E("PDFCrop").CROP_MEDIA; } catch (e) {}   // PDF 크기 그대로(실제 크기 시안)
+    try { if (!ID) frame.place(new File(p)); else frame.place(p); }
+    catch (e) { try { frame.place(p); } catch (e2) { log.push("넣기 실패 " + name + ": " + e2); return false; } }
+    finally { try { if (oldCrop !== null) pp.pdfCrop = oldCrop; } catch (e) {} }
+    var FO = E("FitOptions");
+    try { frame.fit(fill ? FO.FILL_PROPORTIONALLY : FO.PROPORTIONALLY); frame.fit(FO.CENTER_CONTENT); } catch (e) {}
+    return true;
+}
+var DOBIRA_SRC = null;   // 국부론 도비라 쪽의 장식(띠·테두리·선·글상자) — 그림만 빼고
+function findDobiraSource(src) {
+    // 국부론에서 그림이 있고 반투명 띠가 있는 첫 쪽(19쪽 '애덤 스미스는 누구인가?')
+    try {
+        for (var i = 0; i < src.pages.length; i++) {
+            var pg = src.pages.item(i), its = pg.pageItems, img = false, band = false, keep = [];
+            for (var k = 0; k < its.length; k++) {
+                var it = its.item(k).getElements()[0], hasImg = false;
+                try { hasImg = it.images.length > 0; } catch (e) {}
+                if (hasImg) { img = true; continue; }
+                try { if (it.transparencySettings.blendingSettings.opacity < 100 && it.constructor.name === "Rectangle") band = true; } catch (e) {}
+                keep.push(it);
+            }
+            if (img && band && keep.length >= 3) { report.push("도비라 장식: 국부론 " + pg.name + "쪽에서 복사"); return { page: pg, items: keep }; }
+        }
+    } catch (e) { log.push("국부론 도비라 찾기: " + e); }
+    log.push("국부론 도비라를 찾지 못함 — 도비라는 회색 바탕으로 둠");
+    return null;
+}
+
 function dobira(doc, page, ch) {
     var b = page.bounds, bl = 3 * MM;
     var r = page.rectangles.add({ geometricBounds: [b[0] - bl, b[1], b[2] + bl, b[3] + bl] });
     var k80 = doc.swatches.itemByName("C=0 M=0 Y=0 K=80");
     setp(r, "fillColor", k80.isValid ? k80 : doc.swatches.itemByName("Black"));
+    // 공통 일러스트(확정 2026-11-09)를 재단선까지 꽉 채우고, 국부론 도비라 장식을 같은 자리에 얹는다
+    if (DATA.dobiraImg && placeInto(r, DATA.dobiraImg, true) && DOBIRA_SRC) {
+        var sb = DOBIRA_SRC.page.bounds, num = null, ttl = null;
+        // 복제 순서만으로는 앞뒤가 국부론과 같게 쌓이지 않는다(5·6차 실행) → 복사 뒤 글이 든 개체를 맨 앞으로, 그림을 맨 뒤로 직접 옮긴다
+        var withText = [];
+        for (var i = DOBIRA_SRC.items.length - 1; i >= 0; i--) {
+            try {
+                var s = DOBIRA_SRC.items[i], c = s.duplicate(page), g = s.geometricBounds;
+                var hasT = (c.constructor.name === "TextFrame");
+                try { var api = c.allPageItems; for (var z = 0; z < api.length && !hasT; z++) if (api[z].constructor.name === "TextFrame") hasT = true; } catch (eW) {}
+                if (hasT) withText.push(c);
+                c.move([b[1] + (g[1] - sb[1]), b[0] + (g[0] - sb[0])]);
+                var tfs = (c.constructor.name === "TextFrame") ? [c] : c.textFrames;
+                var all = []; try { all = c.allPageItems; } catch (e) {}
+                if (c.constructor.name === "TextFrame") all = [c];
+                for (var a = 0; a < all.length; a++) {
+                    if (all[a].constructor.name !== "TextFrame") continue;
+                    if (/^\s*\d+\s*$/.test(String(all[a].contents))) num = all[a]; else ttl = all[a];
+                }
+            } catch (e) { log.push("도비라 장식 복사: " + e); }
+        }
+        try { r.sendToBack(); } catch (e) {}
+        for (var w = 0; w < withText.length; w++) { try { withText[w].bringToFront(); } catch (e) {} }
+        if (num && ttl) {
+            num.parentStory.contents = ch.num;
+            ttl.parentStory.contents = ch.dobira.join("\r");
+            try { ttl.recompose(); if (ttl.overflows) log.push(ch.num + "장 도비라 제목이 글상자를 넘침"); } catch (e) {}
+            return;
+        }
+        log.push(ch.num + "장 도비라: 국부론 번호·제목 글상자를 못 찾아 기본 배치로 둠");
+    }
     var t = page.textFrames.add({ geometricBounds: [b[0] + 95 * MM, b[1] + 38.3 * MM, b[0] + 160 * MM, b[1] + 115 * MM] });
     // 장 번호와 장 제목만 넣는다. 도비라 일러스트 안내는 인쇄 안 되는 이름표로 따로(넘친 글 방지)
     // 국부론 도비라처럼 제목을 어절 사이에서 두 줄로 나눈다(글자 중간 줄바꿈 방지)
@@ -518,23 +612,40 @@ function flow(doc, page, ch, master) {
         var fid = ch.p[k][2];
         if (!fid || k >= paras.length) continue;
         var ids = (fid === "2-1") ? ["2-1R", "2-1"] : [fid];   // 뒤에서부터 넣으므로 결과 순서는 2-1, 2-1R
+        // 시안 PDF가 있는 도판은 원고의 도판 설명 글(인쇄용이 아님)을 지우고 그림만 남긴다
+        var hasFile = true;
+        for (var q0 = 0; q0 < ids.length; q0++) if (!DATA.figFile[ids[q0]]) hasFile = false;
+        if (hasFile) {
+            try {
+                var pk = paras.item(k), nc = pk.characters.length;
+                var endAt = (pk.characters.item(nc - 1).contents === "\r") ? nc - 2 : nc - 1;
+                if (endAt >= 0) pk.characters.itemByRange(0, endAt).remove();
+            } catch (eDel) { log.push("도" + fid + " 설명 글 지우기: " + eDel); }
+        }
         for (var q = 0; q < ids.length; q++) {
-            var sz = DATA.fig[ids[q]] || [101, 60], h = sz[1];
-            if (h > FIG_MAX_H) { log.push("도" + ids[q] + ": 높이 " + h + "mm가 판면에 안 들어가 자리 상자를 " + FIG_MAX_H + "mm로 줄임(실제 도판은 한 면 전체로 따로 앉힐 것)"); h = FIG_MAX_H; }
+            var sz = DATA.fig[ids[q]] || [101, 60], h = sz[1], file = DATA.figFile[ids[q]];
+            if (h > FIG_MAX_H) { log.push("도" + ids[q] + ": 높이 " + h + "mm가 판면에 안 들어가 상자를 " + FIG_MAX_H + "mm로 줄임" + (file ? "(시안 " + Math.round(FIG_MAX_H / h * 100) + "%로 축소)" : "") + " — 실제 도판은 한 면 전체로 따로 앉힐 것"); h = FIG_MAX_H; }
             try {
                 if (q > 0) paras.item(k).insertionPoints.item(0).contents = "\r";   // 2-1 펼침면: 상자마다 문단을 나눈다
                 var ip = paras.item(k).insertionPoints.item(0), box;
-                try { box = ip.textFrames.add(); }
+                try { box = file ? ip.rectangles.add() : ip.textFrames.add(); }
                 catch (eAdd) {
                     // 대안: 쪽에 상자를 만든 뒤 그 자리에 고정 개체로 넣는다
                     var pg = ip.parentTextFrames[0].parentPage;
-                    box = pg.textFrames.add();
+                    box = file ? pg.rectangles.add() : pg.textFrames.add();
                     box.anchoredObjectSettings.insertAnchoredObject(ip, AP.ABOVE_LINE);
                 }
                 box.geometricBounds = [0, 0, h * MM, sz[0] * MM];
                 var ao = box.anchoredObjectSettings;
                 setp(ao, "anchoredPosition", AP.ABOVE_LINE);
                 setp(ao, "horizontalAlignment", HA.CENTER_ALIGN);
+                if (file) {
+                    try { box.strokeWeight = 0; box.fillColor = doc.swatches.itemByName("None"); } catch (eF) {}
+                    if (placeInto(box, file, false)) { FIG_N++; continue; }
+                    // 넣기에 실패하면 회색 자리 상자로 되돌린다
+                    try { box.fillColor = FIG_GRAY; } catch (eF2) {}
+                    continue;
+                }
                 box.contents = "[도" + ids[q].replace("R", " 오른쪽") + "] " + sz[0] + "×" + sz[1] + "mm — 인디자인에서 제작: " + (DATA.guide[ids[q]] || "시안 참고");
                 if (figOS) { try { box.applyObjectStyle(figOS, true); } catch (eOS) { box.appliedObjectStyle = figOS; } }
                 if (figPS) try { box.parentStory.paragraphs.item(0).appliedParagraphStyle = figPS; } catch (ePS) {}
