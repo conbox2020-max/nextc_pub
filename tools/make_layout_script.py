@@ -12,6 +12,7 @@ order = ["ch01", "ch02", "ch03", "ch04", "ch05", "ch06", "ch07", "back"]
 PAREN_STYLES = {"본문", "본문 삽입", "목록", "번호 목록", "잠깐 본문", "잠깐 본문 첫", "잠깐 본문 이어", "잠깐 본문 끝",
                 "절 제목", "소제목", "소소제목", "질문 제목"}
 paren_log = []
+LONG_PAREN = 15   # 괄호 속 한글 글자가 이보다 길면 '긴 괄호'(영문 이름은 길어도 영문괄호)
 
 def prep(s, t):
     """조판용으로 문단을 다듬는다. 돌려주는 값: (스타일, 글자, [[시작, 길이, 문자 스타일], …]) 또는 None(뺄 문단)"""
@@ -26,10 +27,15 @@ def prep(s, t):
             inner = m.group(1)
             latin = re.search(r"[A-Za-z]", inner) and not re.search(r"[가-힣㐀-鿿]", inner)
             out += t[pos:m.start()]
-            spans.append([len(out), len(inner), "영문괄호" if latin else "한글괄호"])
-            out += inner
+            if not latin and len(inner) > LONG_PAREN:
+                # 긴 괄호(한글 문장·구절, 2026-11-11 편집자 결정): 괄호 기호를 남기고 크기만 10pt('긴괄호')
+                spans.append([len(out), len(inner) + 2, "긴괄호"])
+                out += "(" + inner + ")"
+                paren_log.append(f"{s}: {inner}")
+            else:
+                spans.append([len(out), len(inner), "영문괄호" if latin else "한글괄호"])
+                out += inner
             pos = m.end()
-            if len(inner) > 15: paren_log.append(f"{s}: {inner}")
         t = out + t[pos:]
     if any(ord(c) > 0xFFFF for c in t):
         raise SystemExit("BMP 밖 글자가 있어 문자 위치가 어긋날 수 있음: " + t[:40])
@@ -87,8 +93,10 @@ for fid in FIGSIZE:
 FRONT = {"reserve": ["표제지", "판권", "속표지"], "preface": "[머리말 자리 — 원고를 받으면 이 문단을 바꿔 넣는다]"}
 # 저장 위치(2026-11-11 사용자 지정): conbo > 인디자인 > 10대를 위한 부동산 교양 수업
 SAVE = {"folder": ["인디자인", "10대를 위한 부동산 교양 수업"], "user": "conbo", "file": "부동산교양수업_본문_v1"}
-PAREN_N = sum(len(p[3]) for ch in book for p in ch["p"])
-data = json.dumps({"book": book, "fig": FIGSIZE, "guide": GUIDE, "front": FRONT, "save": SAVE, "parenCount": PAREN_N}, ensure_ascii=False)
+LONG_N = sum(1 for ch in book for p in ch["p"] for sp in p[3] if sp[2] == "긴괄호")
+PAREN_N = sum(len(p[3]) for ch in book for p in ch["p"]) - LONG_N
+data = json.dumps({"book": book, "fig": FIGSIZE, "guide": GUIDE, "front": FRONT, "save": SAVE,
+                   "parenCount": PAREN_N, "longParen": LONG_N}, ensure_ascii=False)
 JS = r'''// 《10대를 위한 부동산 교양 수업》 본문 조판 스크립트 (자동 생성: tools/make_layout_script.py — 이 파일을 직접 고치지 말 것)
 // UXP(.idjs)와 ExtendScript(.jsx) 모두에서 돈다.
 // 준비: 인디자인에서 《국부론 수업》 새 조판 파일(국부론수업_본문_새조판.indd)을 열어 두고 앞에 둔다. 원본은 읽기만 한다.
@@ -244,7 +252,7 @@ function main() {
         report.push(line);
     }
     if (blanks.length) report.push("빈 쪽(부모 페이지 없음): " + blanks.join(", ") + "쪽");
-    report.push("괄호: " + DATA.parenCount + "곳에서 괄호 기호를 지우고 '한글괄호'·'영문괄호' 문자 스타일 적용(출처·도판 자리는 괄호 유지)");
+    report.push("괄호: " + DATA.parenCount + "곳에서 괄호 기호를 지우고 '한글괄호'·'영문괄호' 문자 스타일 적용, 긴 괄호 " + DATA.longParen + "곳은 괄호를 남기고 10pt('긴괄호'). 출처·도판 자리는 그대로");
     try { APP.scriptPreferences.measurementUnit = E("AutoEnum").AUTO_VALUE; } catch (e) {}   // AUTO_VALUE는 AutoEnum에 있다
     var summary = "조판 완료: 총 " + doc.pages.length + "쪽\n" + report.join("\n") +
         (log.length ? ("\n\n확인 필요 " + log.length + "건 (전체는 1쪽 왼쪽 대지의 '조판 기록')\n" + log.slice(0, 12).join("\n")) : "\n\n확인 필요 없음");
@@ -483,6 +491,12 @@ function makeStyles(doc) {
     var white = doc.swatches.itemByName("Paper");
     mk("도비라 제목", "만화 대사", [["appliedFont", gyeokdong], ["pointSize", 18], ["leading", 23.6], ["tracking", 0], ["fillColor", white], ["justification", J.CENTER_ALIGN]]);
     mk("도비라 번호", "도비라 제목", [["pointSize", 20], ["leading", 26], ["spaceAfter", 4]]);
+    // 긴 괄호(한글 문장·구절): 괄호는 남기고 크기만 10pt. 서체·색은 문단 그대로(2026-11-11 편집자 결정)
+    try {
+        var lp = doc.characterStyles.itemByName("긴괄호");
+        if (!lp.isValid) lp = doc.characterStyles.add({ name: "긴괄호" });
+        setp(lp, "pointSize", 10);
+    } catch (e) { log.push("문자 스타일 긴괄호: " + e); }
     // 도판 자리 상자 개체 스타일: K15 칠, 선 없음
     try {
         var os = doc.objectStyles.itemByName("도판 자리");
@@ -567,5 +581,5 @@ JS = JS.replace("__DATA__", data)
 for ext in ("idjs", "jsx"):
     with open(os.path.join(D, f"조판_부동산교양수업.{ext}"), "w", encoding="utf-8-sig" if ext == "jsx" else "utf-8") as f:
         f.write(JS)
-print("ok", len(JS), "괄호", PAREN_N)
+print("ok", len(JS), "괄호 지움", PAREN_N, "긴 괄호(10pt)", LONG_N)
 for x in paren_log: print("  긴 괄호:", x)
