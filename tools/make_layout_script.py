@@ -9,7 +9,7 @@ order = ["ch01", "ch02", "ch03", "ch04", "ch05", "ch06", "ch07", "back"]
 # 국부론은 본문 계열 문단의 괄호 기호를 지우고, 괄호 속 글자에 문자 스타일 '한글괄호'·'영문괄호'
 # (고딕Neo1 Lt 8pt, K80, 기준선 −1pt)를 썼다. 캡션·도판 출처·저서 연도에는 괄호를 남겼다.
 # → 출처 목록(참고 자료)과 도판 자리 문단은 괄호를 그대로 둔다.
-PAREN_STYLES = {"본문", "본문 삽입", "목록", "번호 목록", "잠깐 본문", "잠깐 본문 첫", "잠깐 본문 이어", "잠깐 본문 끝",
+PAREN_STYLES = {"본문", "본문 삽입", "잠깐 제목", "목록", "번호 목록", "잠깐 본문", "잠깐 본문 첫", "잠깐 본문 이어", "잠깐 본문 끝",
                 "절 제목", "소제목", "소소제목", "질문 제목"}
 paren_log = []
 LONG_PAREN = 15   # 괄호 속 한글 글자가 이보다 길면 '긴 괄호'(영문 이름은 길어도 영문괄호)
@@ -60,19 +60,35 @@ CH_COLOR = {"01": "chapter 2, 16",   # 88/44/99/6  짙은 녹색(지금 색)
             "06": "Chapter 9",       # 0/57/93/17  황토
             "07": "chapter 7"}       # 4/68/46/0   장미색(국부론 1부)
 
+# 잠깐 코너 제목(2026-11-11 편집자 요청: 모든 잠깐 코너에 제목, 국부론 잠깐 코너와 같게) — 원고에 없어 [제안]으로 따로 둔다
+JT = json.load(open(os.path.join(D, "잠깐_제목.json"), encoding="utf-8"))["제목"]
+JTITLE = {(x["장"], x["순서"]): x for x in JT}
+
 book = []
 for k in order:
     blocks = json.load(open(os.path.join(D, k + ".json"), encoding="utf-8"))
     title = next((b for b in blocks if b["s"] == "장 제목"), None)
     num = title["n"] if title else ""
-    paras = []
-    for b in blocks:
+    paras, jn = [], 0
+    for bi, b in enumerate(blocks):
         if b["s"] == "장 제목": continue
+        if b["s"] == "잠깐 라벨":
+            # '잠깐!' 글자는 국부론 리본에 들어 있으므로 라벨 문단 대신 제목 문단을 둔다
+            jn += 1
+            jt = JTITLE.get((k, jn))
+            body = blocks[bi + 1]["t"] if bi + 1 < len(blocks) else ""
+            if not jt or not body.startswith(jt["첫머리"]):
+                raise SystemExit(f"잠깐 제목이 맞지 않음: {k} {jn}번째 상자 — 잠깐_제목.json 확인 ('{body[:20]}')")
+            r = prep("잠깐 제목", jt["제목"])
+            paras.append(["잠깐 제목", r[1], "", r[2]])
+            continue
         r = prep(b["s"], b["t"])
         if not r: continue
         s = r[0]
         if s == "절 제목" and num in CH_COLOR: s = "절 제목_" + num    # 장별 절 제목(색만 다름)
         paras.append([s, r[1], b.get("fig") or "", r[2]])
+    if jn != sum(1 for x in JT if x["장"] == k):
+        raise SystemExit(f"잠깐 상자 수가 다름: {k} 원고 {jn}, 잠깐_제목.json {sum(1 for x in JT if x['장'] == k)}")
     tt = title["t"] if title else ""
     book.append({"key": k, "num": title["n"] if title else "", "title": tt, "dobira": dobira_lines(tt), "p": paras})
 
@@ -123,7 +139,7 @@ SAVE = {"folder": ["인디자인", "10대를 위한 부동산 교양수업"], "a
 LONG_N = sum(1 for ch in book for p in ch["p"] for sp in p[3] if sp[2] == "긴괄호")
 PAREN_N = sum(len(p[3]) for ch in book for p in ch["p"]) - LONG_N
 data = json.dumps({"book": book, "fig": FIGSIZE, "guide": GUIDE, "front": FRONT, "save": SAVE,
-                   "parenCount": PAREN_N, "longParen": LONG_N, "chColor": CH_COLOR}, ensure_ascii=False)
+                   "parenCount": PAREN_N, "longParen": LONG_N, "chColor": CH_COLOR, "jamkkanN": len(JT)}, ensure_ascii=False)
 JS = r'''// 《10대를 위한 부동산 교양 수업》 본문 조판 스크립트 (자동 생성: tools/make_layout_script.py — 이 파일을 직접 고치지 말 것)
 // UXP(.idjs)와 ExtendScript(.jsx) 모두에서 돈다.
 // 준비: 인디자인에서 《국부론 수업》 새 조판 파일(국부론수업_본문_새조판.indd)을 열어 두고 앞에 둔다. 원본은 읽기만 한다.
@@ -140,6 +156,93 @@ var log = [];          // 확인 필요
 var report = [];       // 장별 시작 쪽 등
 var started = false;
 var FIG_GRAY = null;   // 도판 자리 상자 칠(makeStyles에서 정함)
+// 잠깐 상자 치수(mm). top/bottom: 음영 위·아래 오프셋, before/after: 상자 앞뒤 간격(리본이 윗글에 닿지 않게)
+var JBOX = { top: 10, bottom: 6, before: 13, after: 8, ribbonDX: -4.8, ribbonDY: -4.8 };
+var RIBBON = null;     // 국부론에서 복사한 '잠깐 !' 리본(새 문서 1쪽에 원본 하나, 끝나면 지움)
+var RIBBON_N = 0;
+var RIB_CORR = null;   // 리본 위치 보정값 [가로, 세로](pt) — 첫 리본에서 잰다
+
+function copyRibbon(src, doc) {
+    // 국부론 잠깐 코너에서 '잠깐 !' 리본 그룹(노란 띠 + 글상자)을 찾아 새 문서로 복사한다.
+    // 리본과 상자의 위치 차이도 국부론에서 다시 잰다(기본값 −4.8mm, −4.8mm)
+    try {
+        var pages = src.pages;
+        for (var i = 0; i < pages.length; i++) {
+            var gs = pages.item(i).groups;
+            for (var k = 0; k < gs.length; k++) {
+                var G = gs.item(k), subs = G.groups;
+                for (var s = 0; s < subs.length; s++) {
+                    var R = subs.item(s), tfs = R.textFrames;
+                    if (!tfs.length || !/^잠깐/.test(String(tfs.item(0).contents))) continue;
+                    var gt = G.textFrames;
+                    for (var t = 0; t < gt.length; t++) {
+                        var f = gt.item(t), cn = "";
+                        try { cn = f.fillColor.name; } catch (e) {}
+                        if (cn.indexOf("Y=68") >= 0) {
+                            var rb = R.geometricBounds, bb = f.geometricBounds;
+                            JBOX.ribbonDX = (rb[1] - bb[1]) / MM; JBOX.ribbonDY = (rb[0] - bb[0]) / MM;
+                        }
+                    }
+                    var c = R.duplicate(doc.pages.item(0));
+                    report.push("잠깐 리본: 국부론 " + pages.item(i).name + "쪽 리본을 복사(상자 왼쪽 위에서 " +
+                        Math.round(-JBOX.ribbonDX * 10) / 10 + "mm, " + Math.round(-JBOX.ribbonDY * 10) / 10 + "mm 바깥)");
+                    return c;
+                }
+            }
+        }
+    } catch (e) { log.push("잠깐 리본 복사: " + e); return null; }
+    log.push("잠깐 리본을 국부론에서 찾지 못함 — 리본 없이 상자만 만듦");
+    return null;
+}
+
+function placeRibbons(story) {
+    if (!RIBBON) return 0;
+    var AP = E("AnchorPosition"), n = 0, ps = story.paragraphs;
+    for (var i = 0; i < ps.length; i++) {
+        var p = ps.item(i);
+        if (p.appliedParagraphStyle.name !== "잠깐 제목") continue;
+        try {
+            var ip = p.insertionPoints.item(0), pg = ip.parentTextFrames[0].parentPage;
+            var r = RIBBON.duplicate(pg);
+            r.anchoredObjectSettings.insertAnchoredObject(ip, AP.ANCHORED);
+            var ao = r.anchoredObjectSettings;
+            setp(ao, "anchorPoint", E("AnchorPoint").TOP_LEFT_ANCHOR);
+            setp(ao, "horizontalReferencePoint", E("AnchoredRelativeTo").COLUMN_EDGE);
+            setp(ao, "verticalReferencePoint", E("VerticallyRelativeTo").LINE_ASCENT);
+            try { ao.pinPosition = false; } catch (e) {}                    // 판면 밖(위 여백)으로 나가도 그대로
+            try { ao.spineRelative = false; } catch (e) {}
+            var cx = RIB_CORR ? RIB_CORR[0] : 0, cy = RIB_CORR ? RIB_CORR[1] : 0;
+            setp(ao, "anchorXoffset", JBOX.ribbonDX * MM + cx);
+            setp(ao, "anchorYoffset", (JBOX.ribbonDY - JBOX.top) * MM + cy);   // 음영 위 오프셋만큼 + 리본 돌출만큼 위로
+            if (!RIB_CORR) {
+                // 리본은 회전된 그룹이라 인디자인이 회전 전 테두리로 위치를 잡는다(3차 실행 실측: 오른쪽 9.8mm 어긋남).
+                // 첫 리본의 실제 위치를 재서 보정값을 구하고 이후 리본에 그대로 쓴다
+                // 회전된 그룹에서는 가로 오프셋의 방향이 뒤집혀 작동하기도 한다(4차 실행 실측) → 보정 뒤 다시 재서
+                // 오차가 커졌으면 반대 방향으로 고친다
+                try {
+                    var fb = ip.parentTextFrames[0].geometricBounds, ln = p.lines.item(0);
+                    var want = [fb[1] + JBOX.ribbonDX * MM, ln.baseline - ln.ascent - JBOX.top * MM + JBOX.ribbonDY * MM];   // [왼, 위]
+                    function err() { var g = r.geometricBounds; return [want[0] - g[1], want[1] - g[0]]; }
+                    var keys = ["anchorXoffset", "anchorYoffset"], base = [ao.anchorXoffset, ao.anchorYoffset], corr = [0, 0];
+                    for (var ax = 0; ax < 2; ax++) {
+                        var e0 = err()[ax];
+                        if (Math.abs(e0) < 0.3) continue;
+                        ao[keys[ax]] = base[ax] + e0;
+                        if (Math.abs(err()[ax]) > Math.abs(e0)) ao[keys[ax]] = base[ax] - e0;
+                        corr[ax] = ao[keys[ax]] - base[ax];
+                    }
+                    RIB_CORR = corr;
+                    var left = err();
+                    report.push("잠깐 리본 위치 보정: 가로 " + Math.round(corr[0] / MM * 10) / 10 + "mm, 세로 " + Math.round(corr[1] / MM * 10) / 10 +
+                        "mm (남은 오차 " + Math.round(left[0] / MM * 10) / 10 + ", " + Math.round(left[1] / MM * 10) / 10 + "mm)");
+                    if (Math.abs(left[0]) > MM || Math.abs(left[1]) > MM) log.push("잠깐 리본 위치가 국부론과 1mm 넘게 다름 — 화면 확인");
+                } catch (e) { RIB_CORR = [0, 0]; log.push("잠깐 리본 위치 보정 실패: " + e); }
+            }
+            n++;
+        } catch (e) { log.push("잠깐 리본 넣기(" + p.contents.substr(0, 10) + "): " + e); }
+    }
+    return n;
+}
 var RESULT = null;     // { doc, src, summary }
 
 // ── 공통 도우미 ──────────────────────────────────────────
@@ -233,6 +336,7 @@ function main() {
     withSource(srcFile, "부모 페이지", function (f) { doc.loadMasters(f, CR); });
     var master = pickMaster(doc, srcMasterName);
     fixRunningHead(doc);
+    RIBBON = copyRibbon(src, doc);
 
     // 3) 이 책용 스타일 만들기 — 국부론 스타일을 바탕으로
     makeStyles(doc);
@@ -279,6 +383,9 @@ function main() {
         report.push(line);
     }
     if (blanks.length) report.push("빈 쪽(부모 페이지 없음): " + blanks.join(", ") + "쪽");
+    try { if (RIBBON) RIBBON.remove(); } catch (e) {}
+    report.push("잠깐 코너: 제목 " + DATA.jamkkanN + "개, 리본 " + RIBBON_N + "개");
+    if (RIBBON && RIBBON_N !== DATA.jamkkanN) log.push("잠깐 리본 수(" + RIBBON_N + ")가 제목 수(" + DATA.jamkkanN + ")와 다름");
     report.push("괄호: " + DATA.parenCount + "곳에서 괄호 기호를 지우고 '한글괄호'·'영문괄호' 문자 스타일 적용, 긴 괄호 " + DATA.longParen + "곳은 괄호를 남기고 10pt('긴괄호'). 출처·도판 자리는 그대로");
     try { APP.scriptPreferences.measurementUnit = E("AutoEnum").AUTO_VALUE; } catch (e) {}   // AUTO_VALUE는 AutoEnum에 있다
     var summary = "조판 완료: 총 " + doc.pages.length + "쪽\n" + report.join("\n") +
@@ -437,6 +544,9 @@ function flow(doc, page, ch, master) {
     }
     // 상자 때문에 늘어난 만큼 다시 흘린다
     th = thread(doc, th.last, ch, master);
+    // 잠깐 리본: 흘리기가 끝난 뒤 제목 문단마다 붙인다(사용자 지정 고정 개체라 글 흐름을 밀지 않는다)
+    var nr = placeRibbons(story);
+    if (nr) { RIBBON_N += nr; th = thread(doc, th.last, ch, master); }
     return { last: th.last.parentPage ? th.last.parentPage.name : page.name, overset: th.overset };
 }
 
@@ -501,22 +611,32 @@ function makeStyles(doc) {
     // 목록 = 국부론 '본문'에 내어쓰기만
     mk("목록", "본문", [["leftIndent", 4 * MM], ["firstLineIndent", -4 * MM]]);
     mk("번호 목록", "본문", [["leftIndent", 5 * MM], ["firstLineIndent", -5 * MM]]);
-    // '잠깐!' 상자: 연노랑(0/6/68/0, 확정 색)을 국부론 인용 상자('인용_국부론')와 같은 짜임으로.
-    // 국부론 값: 음영 좌우 오프셋 0, 위아래 2.65mm, 글 들여쓰기 왼 5 / 오른 3mm, 음영 12%.
-    // 연노랑 12%는 거의 보이지 않아 농도는 지금 값(20%)을 유지한다 [제안]. 국부론의 왼쪽 선(2.5pt)은 넣지 않았다.
-    var shade = [["paragraphShadingOn", true], ["paragraphShadingColor", yellow], ["paragraphShadingTint", 20],
-                 ["paragraphShadingTopOffset", 2.65 * MM], ["paragraphShadingBottomOffset", 2.65 * MM],
-                 ["paragraphShadingLeftOffset", 0], ["paragraphShadingRightOffset", 0]];
-    var boxIn = [["leftIndent", 5 * MM], ["rightIndent", 3 * MM]];
-    mk("잠깐 라벨", "만화 대사", [["justification", J.LEFT_ALIGN], ["pointSize", 13], ["firstLineIndent", 0], ["spaceBefore", 26], ["keepWithNext", 2]].concat(boxIn, shade));
-    mk("잠깐 본문", "본문", [["firstLineIndent", 0], ["spaceAfter", 26]].concat(boxIn, shade));
-    // 여러 문단 상자(원본 Docs 대조, 2026-11-11): 첫 문단 들여쓰기 없음, 다음 문단부터 본문과 같은 들여쓰기, 문단 사이 간격 없음, 마지막 문단 뒤 26pt.
-    // 음영 설정이 같아서 이어진 문단의 음영은 한 상자로 합쳐진다
-    var bodyIndent = 5 * MM;
-    try { var bs = P.itemByName("본문"); if (bs.isValid && bs.firstLineIndent > 0) bodyIndent = bs.firstLineIndent; } catch (e) {}
+    // '잠깐!' 코너 = 국부론 잠깐 코너 실측(49·142쪽, 2026-11-11 편집자 요청). 국부론은 손으로 놓은 그룹이지만,
+    // 여기서는 글 흐름을 따라 움직이도록 문단 음영으로 같은 모양을 만든다.
+    //  상자: 폭 101mm(판면), 0/6/68/0 불투명도 36% → 농도 36%, 둥근 모서리 5mm
+    //  글: 상자 안 왼 10.7 / 오른 10.8mm, 위 10mm, 아래 약 8mm
+    //  제목: 스터디윗미 03 Bold 12/24pt, 본문: 스터디윗미 01 Light 10.5/24pt, 모든 문단 첫 줄 3mm, 자간 0
+    //  리본('잠깐 !'): 국부론 리본 그룹을 복사해 제목 문단에 고정(상자 왼쪽 위에서 4.8mm 바깥)
+    var bold = fontName("Sandoll 스터디윗미", ["03 Bold", "Bold"]), light = fontName("Sandoll 스터디윗미", ["01 Light", "Light"]);
+    var RC = E("CornerOptions").ROUNDED_CORNER, R5 = 5 * MM;
+    var shade = [["paragraphShadingOn", true], ["paragraphShadingColor", yellow], ["paragraphShadingTint", 36],
+                 ["paragraphShadingTopOffset", JBOX.top * MM], ["paragraphShadingBottomOffset", JBOX.bottom * MM],
+                 ["paragraphShadingLeftOffset", 0], ["paragraphShadingRightOffset", 0],
+                 ["paragraphShadingTopLeftCornerOption", RC], ["paragraphShadingTopRightCornerOption", RC],
+                 ["paragraphShadingBottomLeftCornerOption", RC], ["paragraphShadingBottomRightCornerOption", RC],
+                 ["paragraphShadingTopLeftCornerRadius", R5], ["paragraphShadingTopRightCornerRadius", R5],
+                 ["paragraphShadingBottomLeftCornerRadius", R5], ["paragraphShadingBottomRightCornerRadius", R5],
+                 ["mergeConsecutiveParaBorders", true]];   // 이어진 문단을 한 상자로(모서리가 문단마다 둥글어지지 않게)
+    try { shade.push(["paragraphShadingTopOrigin", E("ParagraphShadingTopOriginEnum").ASCENT_TOP_ORIGIN]); } catch (e) {}
+    try { shade.push(["paragraphShadingBottomOrigin", E("ParagraphShadingBottomOriginEnum").DESCENT_BOTTOM_ORIGIN]); } catch (e) {}
+    var boxIn = [["leftIndent", 10.7 * MM], ["rightIndent", 10.8 * MM], ["firstLineIndent", 3 * MM], ["tracking", 0]];
+    mk("잠깐 제목", "본문", [["appliedFont", bold], ["pointSize", 12], ["leading", 24], ["justification", J.LEFT_ALIGN],
+        ["spaceBefore", JBOX.before * MM], ["spaceAfter", 0], ["keepWithNext", 2]].concat(heads, boxIn, shade));
+    mk("잠깐 본문", "본문", [["appliedFont", light], ["pointSize", 10.5], ["leading", 24], ["spaceAfter", JBOX.after * MM]].concat(boxIn, shade));
+    // 여러 문단 상자: 국부론처럼 모든 문단 첫 줄 3mm, 문단 사이 간격 없음, 마지막 문단 뒤만 간격
     mk("잠깐 본문 첫", "잠깐 본문", [["spaceAfter", 0]]);
-    mk("잠깐 본문 이어", "잠깐 본문 첫", [["firstLineIndent", bodyIndent]]);
-    mk("잠깐 본문 끝", "잠깐 본문 이어", [["spaceAfter", 26]]);
+    mk("잠깐 본문 이어", "잠깐 본문 첫", []);
+    mk("잠깐 본문 끝", "잠깐 본문 이어", [["spaceAfter", JBOX.after * MM]]);
     // 도판 자리 = 국부론 '캡션'(스터디윗미 03 Bold 10/12.8, 가운데)
     mk("도판 자리", "캡션", [["spaceBefore", 6.5], ["spaceAfter", 13]]);
     // 출처 목록 = 국부론 '표 본문'(고딕Neo1 Lt 8/12, 자간 −50)에 내어쓰기
