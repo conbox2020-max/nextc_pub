@@ -48,15 +48,31 @@ def dobira_lines(t, one_line=12):   # 18pt 12자 ≈ 70mm < 글상자 폭 76.7mm
     at = min((i for i, c in enumerate(t) if c == " "), key=lambda i: abs(i - mid))
     return [t[:at], t[at + 1:]]
 
+# 장마다 절 제목 색(2026-11-11 편집자 요청). 국부론은 부마다 '대제목' 색을 장 색 견본으로 바꿨다
+# (1부 chapter 7, 2부 chapter 8, 3부 chapter 10). 국부론 장 색 견본 8개 중 7개를 쓰고, 이웃 장끼리
+# 색이 겹치지 않게 색상환을 돌려 배치했다. 녹색이 둘이라 탁한 'chapter 1, 17'(50/0/88/36)은 뺐다.
+# 견본 이름의 숫자는 국부론 장 번호다(이 책의 장 번호가 아님). 뒷부속은 기본 '절 제목'(chapter 2, 16).
+CH_COLOR = {"01": "chapter 2, 16",   # 88/44/99/6  짙은 녹색(지금 색)
+            "02": "chapter 7",       # 4/68/46/0   장미색(국부론 1부)
+            "03": "chapter 5, 13",   # 80/37/14/0  파랑
+            "04": "chapter 10",      # 0/71/83/0   주황(국부론 3부)
+            "05": "chapter 11",      # 0/70/5/36   자주
+            "06": "Chapter 9",       # 0/57/93/17  황토
+            "07": "chapter 8"}       # 12/62/56/0  적갈색(국부론 2부)
+
 book = []
 for k in order:
     blocks = json.load(open(os.path.join(D, k + ".json"), encoding="utf-8"))
     title = next((b for b in blocks if b["s"] == "장 제목"), None)
+    num = title["n"] if title else ""
     paras = []
     for b in blocks:
         if b["s"] == "장 제목": continue
         r = prep(b["s"], b["t"])
-        if r: paras.append([r[0], r[1], b.get("fig") or "", r[2]])
+        if not r: continue
+        s = r[0]
+        if s == "절 제목" and num in CH_COLOR: s = "절 제목_" + num    # 장별 절 제목(색만 다름)
+        paras.append([s, r[1], b.get("fig") or "", r[2]])
     tt = title["t"] if title else ""
     book.append({"key": k, "num": title["n"] if title else "", "title": tt, "dobira": dobira_lines(tt), "p": paras})
 
@@ -107,7 +123,7 @@ SAVE = {"folder": ["인디자인", "10대를 위한 부동산 교양수업"], "a
 LONG_N = sum(1 for ch in book for p in ch["p"] for sp in p[3] if sp[2] == "긴괄호")
 PAREN_N = sum(len(p[3]) for ch in book for p in ch["p"]) - LONG_N
 data = json.dumps({"book": book, "fig": FIGSIZE, "guide": GUIDE, "front": FRONT, "save": SAVE,
-                   "parenCount": PAREN_N, "longParen": LONG_N}, ensure_ascii=False)
+                   "parenCount": PAREN_N, "longParen": LONG_N, "chColor": CH_COLOR}, ensure_ascii=False)
 JS = r'''// 《10대를 위한 부동산 교양 수업》 본문 조판 스크립트 (자동 생성: tools/make_layout_script.py — 이 파일을 직접 고치지 말 것)
 // UXP(.idjs)와 ExtendScript(.jsx) 모두에서 돈다.
 // 준비: 인디자인에서 《국부론 수업》 새 조판 파일(국부론수업_본문_새조판.indd)을 열어 두고 앞에 둔다. 원본은 읽기만 한다.
@@ -471,6 +487,12 @@ function makeStyles(doc) {
     var heads = [["keepLinesTogether", true], ["keepAllLinesTogether", true]];
     // [확정 2026-11-10] 절 제목: 국부론 '대제목'과 같은 서체·크기·색, 새 쪽 시작만 끔
     mk("절 제목", "대제목", [["startParagraph", SP.ANYWHERE], ["spaceBefore", 39], ["spaceAfter", 6.5], ["keepWithNext", 3]].concat(heads));
+    // 장마다 절 제목 색: '절 제목_01'~'_07'은 '절 제목'을 바탕으로 색만 국부론 장 색 견본으로
+    for (var cn in DATA.chColor) {
+        var sw = doc.swatches.itemByName(DATA.chColor[cn]);
+        if (!sw.isValid) { log.push("장 색 견본 없음: " + DATA.chColor[cn] + " (" + cn + "장) — 기본 절 제목 색으로 둠"); mk("절 제목_" + cn, "절 제목", []); continue; }
+        mk("절 제목_" + cn, "절 제목", [["fillColor", sw]]);
+    }
     // [레퍼런스] 소제목 = 국부론 '큰 제목'(스터디윗미 03 Bold 13/26)
     mk("소제목", "큰 제목", [["spaceBefore", 13], ["keepWithNext", 2]].concat(heads));
     // 셋째 단계 제목 = 국부론 '학파 인물'(스터디윗미 03 Bold 10.5/26)에서 왼쪽 들여쓰기만 0
