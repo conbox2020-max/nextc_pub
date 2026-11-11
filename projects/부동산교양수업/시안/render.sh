@@ -3,7 +3,7 @@
 # 사용: ./render.sh <파일.svg> <폭mm> <높이mm>
 set -e
 SVG="$1"; W="$2"; H="$3"; BASE="${SVG%.svg}"
-CH=$(ls -d /opt/pw-browsers/chromium-*/chrome-linux/chrome | head -1)
+CH=$(ls -d /opt/pw-browsers/chromium-*/chrome-linux*/chrome 2>/dev/null | head -1); [ -x "$CH" ] || CH=/opt/pw-browsers/chromium
 TMP=$(mktemp -d)
 BODY=$(sed 's/width="[0-9.]*mm" height="[0-9.]*mm"/width="100%" height="100%"/' "$SVG")
 printf '<html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff"><div style="width:%spx;height:%spx;margin:24px">%s</div></body></html>' \

@@ -198,7 +198,7 @@ def fig_2_1R(h):
     return e
 
 # ── 2-2 전용·공급·계약면적 ─────────────────────────
-A2, A3 = None, None        # ②주거공용·③기타공용 가상 수치(㎡). 편집자 확정 전에는 None → 막대를 점선 자리표시로 그림
+A2, A3 = 10, 8             # ②주거공용·③기타공용 가상 수치(㎡). 2026-11-11 편집자 확정(A안: 공급 52㎡, 계약 60㎡). None이면 점선 자리표시
 
 def fig_2_2(h):
     e = ['<defs><pattern id="hatch" width="1.6" height="1.6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">'
@@ -248,12 +248,19 @@ def fig_2_2(h):
             else:
                 e.append(rect(x, y + 2, ln, 5, col, "none", 0))
                 if pat: e.append(rect(x, y + 2, ln, 5, pat, "none", 0))
-                e.append(t(x + ln / 2, y + 5.5, k, 7.5, 700, "#fff" if col == TEAL else K80))
+                small = ln < 5                       # 좁은 칸(②·③)은 번호를 작게
+                e.append(t(x + ln / 2, y + (5.0 if small else 5.5), k, 5.5 if small else 7.5, 700, "#fff" if col == TEAL else K80))
             x += ln
+        if A2 is not None and A3 is not None:      # 막대 끝에 합계
+            total = 42 + sum(v for kk, v in (("②", A2), ("③", A3)) if any(sg[0] == kk for sg in segs))
+            e.append(t(x + 1.2, y + 5.5, f"{total}㎡", 7.5, 700, K80, "start", NUM))
     e.append(t(bx, 52.0, "① 42㎡ = 등기의 전유부분 면적", 7, 700, TEAL, "start"))
     if A2 is None or A3 is None:
         e.append(t(bx, 56.0, "※ 시안: ②·③ 가상 수치 확정 후", 7, 700, RED, "start"))
         e.append(t(bx, 59.4, "   막대 길이를 비례로 조정", 7, 700, RED, "start"))
+    else:
+        e.append(t(bx, 56.0, f"② 계단·복도 {A2}㎡", 7, 700, K80, "start"))
+        e.append(t(bx, 59.4, f"③ 주차장 등 {A3}㎡", 7, 700, K80, "start"))
     e.append(t(W / 2, 70.0, "같은 집이라도 어디까지 더했는지에 따라", 10))
     e.append(t(W / 2, 74.6, "넓이 숫자가 달라져요.", 10))
     e.append(t(0, 79.4, "• 설명을 위한 가상 평면도. ②·③의 숫자는 설명을 위한 가상 수치다.", 7, 300, anchor="start"))
@@ -261,7 +268,7 @@ def fig_2_2(h):
 
 FIGS.update({"2-1L": ("도2-1_가상등기서류_왼쪽_v1", 110, fig_2_1L, {}),
              "2-1R": ("도2-1_가상등기서류_오른쪽_v1", 101, fig_2_1R, {}),
-             "2-2": ("도2-2_면적평면도_v1", 82, fig_2_2, {})})
+             "2-2": ("도2-2_면적평면도_v2", 82, fig_2_2, {})})
 
 if __name__ == "__main__":
     for k in (sys.argv[1:] or FIGS):
